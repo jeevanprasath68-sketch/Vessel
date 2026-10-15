@@ -1,0 +1,24 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment Variables & Secrets
+.env
+*.env
+
+# Sandboxes & Runtime artifacts
+.sandbox/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pytest_cache/
+.coverage
+htmlcov/
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
