@@ -22,3 +22,8 @@ htmlcov/
 Thumbs.db
 .vscode/
 .idea/
+
+# SQLite Databases
+*.db
+*.sqlite
+*.sqlite3

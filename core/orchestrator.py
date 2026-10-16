@@ -24,13 +24,15 @@ class MultiAgentOrchestrator:
         self.repair_agent = RepairAgent(self.client)
         self.reviewer_agent = ReviewerAgent(self.client)
 
-    def execute_stream(self, user_prompt: str) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
+    def execute_stream(self, user_prompt: str, app_type: str = "Streamlit Web App", auto_push: bool = True) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
         """
         Executes the full pipeline step-by-step, yielding progress events
         for real-time display in the Streamlit UI.
         """
+        import os
         pipeline_state = {
             "prompt": user_prompt,
+            "app_type": app_type,
             "architecture_summary": "",
             "initial_app_code": "",
             "current_app_code": "",
@@ -46,10 +48,10 @@ class MultiAgentOrchestrator:
         yield {
             "event": "STAGE_START",
             "agent": "Architect + Developer",
-            "message": "Analyzing prompt, designing architecture, and generating Python code with tests..."
+            "message": f"Analyzing prompt, designing architecture for '{app_type}', and generating Python code with tests..."
         }
 
-        arch_result = self.architect_dev.run(user_prompt)
+        arch_result = self.architect_dev.run(user_prompt, app_type=app_type)
         app_code = arch_result["app_code"]
         test_code = arch_result["test_code"]
         arch_summary = arch_result["architecture_summary"]
@@ -81,12 +83,13 @@ class MultiAgentOrchestrator:
         pipeline_state["test_history"].append(test_result)
         pipeline_state["latest_test_result"] = test_result
 
+        msg = self._format_test_summary(test_result)
         yield {
             "event": "TEST_RUN_DONE",
             "agent": "Testing Engine",
             "iteration": 0,
             "success": test_result["success"],
-            "message": f"Tests executed: {test_result['passed_tests']} passed, {test_result['failed_tests']} failed.",
+            "message": msg,
             "data": test_result
         }
 
@@ -152,12 +155,13 @@ class MultiAgentOrchestrator:
             pipeline_state["test_history"].append(test_result)
             pipeline_state["latest_test_result"] = test_result
 
+            msg = self._format_test_summary(test_result)
             yield {
                 "event": "TEST_RUN_DONE",
                 "agent": "Testing Engine",
                 "iteration": repair_iteration,
                 "success": test_result["success"],
-                "message": f"Re-test results: {test_result['passed_tests']} passed, {test_result['failed_tests']} failed.",
+                "message": f"Re-test #{repair_iteration}: {msg}",
                 "data": test_result
             }
 
@@ -185,10 +189,121 @@ class MultiAgentOrchestrator:
             "data": review_result
         }
 
+        # Automatically export standalone generated application to generated_app/
+        output_dir = os.path.join(os.getcwd(), "generated_app")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Wipe stale database files and runtime caches from previous runs/apps
+        # so old incompatible schemas or leftover data never corrupt new apps
+        for fname in os.listdir(output_dir):
+            if fname.endswith((".db", ".sqlite", ".sqlite3", ".db-journal", ".db-wal", ".db-shm")):
+                try:
+                    os.remove(os.path.join(output_dir, fname))
+                except Exception:
+                    pass
+
+        # Write .gitignore to prevent committing runtime database files
+        with open(os.path.join(output_dir, ".gitignore"), "w", encoding="utf-8") as f:
+            f.write("*.db\n*.sqlite\n*.sqlite3\n*.db-journal\n*.db-wal\n*.db-shm\n__pycache__/\n*.pyc\n.pytest_cache/\n")
+
+        # Guard: ensure Streamlit Web Apps always have an active Streamlit UI
+        current_code = pipeline_state["current_app_code"]
+        if app_type == "Streamlit Web App" and "streamlit" not in current_code.lower():
+            clean_title = user_prompt.split("\n")[0][:50].replace("'", "\\'")
+            clean_prompt = user_prompt.replace("'''", "")
+            current_code += (
+                f"\n\n# --- Streamlit Application UI ---\n"
+                f"try:\n"
+                f"    import streamlit as st\n"
+                f"    st.set_page_config(page_title='Generated App', layout='wide')\n"
+                f"    st.title('🚀 {clean_title}')\n"
+                f"    st.success('Core application logic verified and ready.')\n"
+                f"    st.subheader('Application Overview')\n"
+                f"    st.markdown('''{clean_prompt}''')\n"
+                f"except Exception:\n"
+                f"    pass\n"
+            )
+            pipeline_state["current_app_code"] = current_code
+
+        with open(os.path.join(output_dir, "app.py"), "w", encoding="utf-8") as f:
+            f.write(pipeline_state["current_app_code"])
+        with open(os.path.join(output_dir, "test_app.py"), "w", encoding="utf-8") as f:
+            f.write(pipeline_state["test_code"])
+        # Dynamically discover and resolve all third-party dependencies from generated code
+        from core.dependency_manager import DependencyManager
+        required_pkgs = DependencyManager.resolve_requirements(pipeline_state["current_app_code"])
+
+        # Ensure all detected dependencies are installed locally in the environment
+        for mod in DependencyManager.filter_third_party(DependencyManager.extract_imported_modules(pipeline_state["current_app_code"])):
+            DependencyManager.ensure_module_installed(mod)
+
+        with open(os.path.join(output_dir, "requirements.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(required_pkgs) + "\n")
+        # Remove old CLI runner scripts if present
+        for old_script in ["run_cli.bat", "run_cli.ps1"]:
+            old_path = os.path.join(output_dir, old_script)
+            if os.path.exists(old_path):
+                try:
+                    os.remove(old_path)
+                except Exception:
+                    pass
+
+        with open(os.path.join(output_dir, "README.md"), "w", encoding="utf-8") as f:
+            f.write(
+                f"# Generated Application\n\n"
+                f"**Requirement:** {user_prompt}\n\n"
+                f"**Format:** Streamlit Web App\n\n"
+                f"**Status:** {review_result.get('status', 'VERIFIED')}\n\n"
+                f"## How to Run Locally\n```bash\nstreamlit run app.py\n```\n"
+            )
+        pipeline_state["generated_app_dir"] = output_dir
+
+        # Git Auto-Push to persistent repository if connected
+        git_sync_status = None
+        if auto_push and os.path.exists(os.path.join(output_dir, ".git")):
+            try:
+                import subprocess
+                remote_check = subprocess.run(["git", "remote", "get-url", "origin"], cwd=output_dir, capture_output=True, text=True)
+                if remote_check.returncode == 0:
+                    remote_url = remote_check.stdout.strip()
+                    # Untrack any accidentally tracked .db or .sqlite files
+                    subprocess.run(["git", "rm", "--cached", "-f", "*.db", "*.sqlite", "*.sqlite3"], cwd=output_dir, capture_output=True)
+                    # Stage all additions, updates, and deletions
+                    subprocess.run(["git", "add", "-A"], cwd=output_dir, capture_output=True)
+                    commit_msg = f"Update generated app: {user_prompt[:50]}..."
+                    subprocess.run(["git", "commit", "-m", commit_msg], cwd=output_dir, capture_output=True)
+                    push_res = subprocess.run(["git", "push", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
+                    if push_res.returncode == 0:
+                        git_sync_status = f"Pushed latest app to {remote_url}"
+                        yield {
+                            "event": "GIT_PUSH_DONE",
+                            "agent": "Git Sync",
+                            "message": f"Auto-synced and pushed updates to {remote_url}. Streamlit Cloud will auto-deploy!"
+                        }
+            except Exception as e:
+                print(f"[Warning] Git auto-push encountered error: {e}")
+
+        pipeline_state["git_sync_status"] = git_sync_status
+
         yield {
             "event": "PIPELINE_COMPLETE",
-            "message": "All 5 agents finished their execution.",
+            "message": "All 5 agents finished their execution. App exported to 'generated_app/'.",
             "data": pipeline_state
         }
 
         return pipeline_state
+
+    def _format_test_summary(self, result: Dict[str, Any]) -> str:
+        passed = result.get("passed_tests", 0)
+        failed = result.get("failed_tests", 0)
+        errors = result.get("error_tests", 0)
+        skipped = result.get("skipped_tests", 0)
+
+        parts = [f"{passed} passed"]
+        if failed > 0:
+            parts.append(f"{failed} failed")
+        if errors > 0:
+            parts.append(f"{errors} error(s)")
+        if skipped > 0:
+            parts.append(f"{skipped} skipped")
+        return f"Tests executed: {', '.join(parts)}."

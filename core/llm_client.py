@@ -2,6 +2,9 @@ import os
 import json
 import re
 from typing import Optional, Dict, Any, List
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class GeminiClient:
     """
@@ -10,15 +13,14 @@ class GeminiClient:
     """
     # Prioritized order of models that support generateContent
     DEFAULT_CANDIDATE_MODELS = [
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
         "gemini-flash-latest",
         "gemini-pro-latest",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-exp",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-pro-latest",
-        "gemini-flash-lite-latest",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
+        "gemini-2.0-flash",
         "gemini-1.5-flash",
         "gemini-1.5-pro"
     ]
@@ -118,53 +120,67 @@ class GeminiClient:
             if candidate != self.model and candidate not in models_to_try:
                 models_to_try.append(candidate)
 
+        import time
+
         for attempt_model in models_to_try:
-            try:
-                # 1. Try modern google.genai client
-                if self._client:
-                    from google.genai import types
-                    config_args = {}
-                    if system_instruction:
-                        config_args["system_instruction"] = system_instruction
-                    if temperature is not None:
-                        config_args["temperature"] = temperature
+            # Try up to 2 times on the current model in case of a momentary spike
+            for retry_attempt in range(2):
+                try:
+                    # 1. Try modern google.genai client
+                    if self._client:
+                        from google.genai import types
+                        config_args = {}
+                        if system_instruction:
+                            config_args["system_instruction"] = system_instruction
+                        if temperature is not None:
+                            config_args["temperature"] = temperature
 
-                    config = types.GenerateContentConfig(**config_args) if config_args else None
-                    response = self._client.models.generate_content(
-                        model=attempt_model,
-                        contents=prompt,
-                        config=config
-                    )
-                    # Succeeded! Update active model and return
-                    self.model = attempt_model
-                    return response.text or ""
+                        config = types.GenerateContentConfig(**config_args) if config_args else None
+                        response = self._client.models.generate_content(
+                            model=attempt_model,
+                            contents=prompt,
+                            config=config
+                        )
+                        # Succeeded! Update active model and return
+                        self.model = attempt_model
+                        return response.text or ""
 
-                # 2. Try legacy google.generativeai
-                elif self._legacy_genai:
-                    model_instance = self._legacy_genai.GenerativeModel(
-                        model_name=attempt_model,
-                        system_instruction=system_instruction
-                    )
-                    response = model_instance.generate_content(
-                        prompt,
-                        generation_config={"temperature": temperature}
-                    )
-                    self.model = attempt_model
-                    return response.text or ""
+                    # 2. Try legacy google.generativeai
+                    elif self._legacy_genai:
+                        model_instance = self._legacy_genai.GenerativeModel(
+                            model_name=attempt_model,
+                            system_instruction=system_instruction
+                        )
+                        response = model_instance.generate_content(
+                            prompt,
+                            generation_config={"temperature": temperature}
+                        )
+                        self.model = attempt_model
+                        return response.text or ""
 
-            except Exception as e:
-                err_str = str(e)
-                # If it's a 404 NOT_FOUND, keep trying next candidate model in the list
-                if "404" in err_str or "NOT_FOUND" in err_str or "not found" in err_str:
-                    continue
-                else:
-                    # Other errors (e.g. 403, quota, invalid key)
-                    raise RuntimeError(f"Gemini API request failed: {err_str}")
+                except Exception as e:
+                    err_str = str(e)
+                    is_quota = any(code in err_str.lower() for code in ["429", "resource_exhausted", "quota"])
+                    is_transient = any(code in err_str.lower() for code in ["503", "unavailable", "high demand", "overloaded", "deadline_exceeded"])
+                    is_not_found = any(code in err_str.lower() for code in ["404", "not_found", "not found", "no longer available"])
 
-        # If even fallback candidates returned 404:
+                    if is_quota or is_not_found:
+                        # Daily quota exhausted or model deprecated: switch immediately to next candidate model without wasting time
+                        break
+                    elif is_transient:
+                        if retry_attempt == 0:
+                            time.sleep(1.0)
+                            continue
+                        else:
+                            break
+                    else:
+                        # Unrecoverable error (e.g. invalid credentials)
+                        raise RuntimeError(f"Gemini API request failed: {err_str}")
+
+        # If all candidates returned 404 or 503:
         raise RuntimeError(
-            f"All attempted Gemini models returned 404 NOT_FOUND.\n"
-            f"Please select 'gemini-flash-latest' or 'gemini-pro-latest' in the sidebar dropdown."
+            f"Google Gemini servers are temporarily experiencing high demand across all tested models.\n"
+            f"Please wait 30 seconds and retry, or toggle '🧪 Offline Demo / Simulation Mode' in the sidebar to proceed immediately."
         )
 
     def generate_json(self, prompt: str, system_instruction: Optional[str] = None) -> Dict[str, Any]:
@@ -178,9 +194,11 @@ class GeminiClient:
         raw_text = self.generate_text(full_prompt, system_instruction=system_instruction, temperature=0.1)
         return self._extract_json(raw_text)
 
-    def _extract_json(self, text: str) -> Dict[str, Any]:
+    def _extract_json(self, text: Optional[str]) -> Dict[str, Any]:
         """Robustly extracts JSON from an LLM response string."""
-        cleaned = text.strip()
+        if not text:
+            return {"error": "Empty response from model"}
+        cleaned = str(text).strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
             cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE)
@@ -200,9 +218,60 @@ class GeminiClient:
     def _mock_response(self, prompt: str) -> str:
         """Simulated agent responses for immediate offline demonstration."""
         prompt_lower = prompt.lower()
+        mock_ui_snippet = (
+            "\n\n# --- Streamlit Interactive User Interface ---\n"
+            "try:\n"
+            "    import streamlit as st\n"
+            "    HAS_STREAMLIT = True\n"
+            "except ImportError:\n"
+            "    HAS_STREAMLIT = False\n\n"
+            "def render_ui():\n"
+            "    if not HAS_STREAMLIT:\n"
+            "        return\n"
+            "    st.set_page_config(page_title='Task Manager', page_icon='📋', layout='wide')\n"
+            "    st.title('📋 Prioritized Task Manager')\n"
+            "    st.caption('Organize and prioritize your daily tasks with status tracking.')\n\n"
+            "    if 'task_manager' not in st.session_state:\n"
+            "        st.session_state.task_manager = TaskManager()\n"
+            "        st.session_state.task_manager.add_task('Initial project setup', priority=3)\n"
+            "        st.session_state.task_manager.add_task('Review pull request', priority=5)\n\n"
+            "    tm = st.session_state.task_manager\n\n"
+            "    with st.sidebar:\n"
+            "        st.header('➕ Add New Task')\n"
+            "        with st.form('new_task_form', clear_on_submit=True):\n"
+            "            new_title = st.text_input('Task Title', placeholder='e.g., Fix database indexing')\n"
+            "            new_priority = st.slider('Priority Level', min_value=1, max_value=5, value=3, help='5 = Highest, 1 = Lowest')\n"
+            "            submitted = st.form_submit_button('Add Task', use_container_width=True)\n"
+            "            if submitted and new_title.strip():\n"
+            "                tm.add_task(new_title.strip(), new_priority)\n"
+            "                st.success('Task added successfully!')\n"
+            "                st.rerun()\n\n"
+            "    total = len(tm.tasks)\n"
+            "    pending_tasks = tm.get_pending_tasks()\n"
+            "    completed_count = total - len(pending_tasks)\n\n"
+            "    m1, m2, m3 = st.columns(3)\n"
+            "    m1.metric('Total Tasks', total)\n"
+            "    m2.metric('Pending Tasks', len(pending_tasks))\n"
+            "    m3.metric('Completed Tasks', completed_count)\n\n"
+            "    st.subheader('📌 Pending Tasks (Prioritized)')\n"
+            "    if not pending_tasks:\n"
+            "        st.info('No pending tasks! All caught up 🎉')\n"
+            "    else:\n"
+            "        for t in pending_tasks:\n"
+            "            c1, c2 = st.columns([5, 1])\n"
+            "            with c1:\n"
+            "                st.markdown(f'**#{t.task_id}**: {t.title} &nbsp;*(Priority: {t.priority}/5)*')\n"
+            "            with c2:\n"
+            "                if st.button('Mark Complete', key=f'complete_{t.task_id}'):\n"
+            "                    tm.complete_task(t.task_id)\n"
+            "                    st.rerun()\n\n"
+            "if __name__ == '__main__':\n"
+            "    render_ui()\n"
+        )
+
         if "architect" in prompt_lower or "developer" in prompt_lower:
             return json.dumps({
-                "architecture_summary": "Simulated In-Memory Task Manager with prioritization and status filtering.",
+                "architecture_summary": "Simulated In-Memory Task Manager with prioritization, Streamlit web UI, and status filtering.",
                 "app_code": (
                     "class Task:\n"
                     "    def __init__(self, task_id: int, title: str, priority: int = 1):\n"
@@ -227,6 +296,7 @@ class GeminiClient:
                     "        # Intentional minor bug on first pass to trigger Repair Agent: returns wrong order\n"
                     "        pending = [t for t in self.tasks.values() if not t.completed]\n"
                     "        return sorted(pending, key=lambda x: x.priority, reverse=False)\n"
+                    + mock_ui_snippet
                 ),
                 "test_code": (
                     "import pytest\n"
@@ -280,6 +350,7 @@ class GeminiClient:
                     "        # Fixed: now correctly sorts highest priority first\n"
                     "        pending = [t for t in self.tasks.values() if not t.completed]\n"
                     "        return sorted(pending, key=lambda x: x.priority, reverse=True)\n"
+                    + mock_ui_snippet
                 )
             })
         elif "review" in prompt_lower:

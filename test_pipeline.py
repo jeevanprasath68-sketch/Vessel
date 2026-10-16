@@ -8,7 +8,7 @@ def main():
     orchestrator = MultiAgentOrchestrator(gemini_client=client, max_repairs=3, timeout_seconds=10)
 
     events_received = []
-    for event in orchestrator.execute_stream("Create a prioritized task manager"):
+    for event in orchestrator.execute_stream("Create a prioritized task manager", auto_push=False):
         event_type = event.get("event")
         agent = event.get("agent", "Orchestrator")
         msg = event.get("message", "")
