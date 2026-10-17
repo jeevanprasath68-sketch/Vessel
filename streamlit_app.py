@@ -1,5 +1,7 @@
 import os
+import sys
 import io
+import socket
 import zipfile
 import time
 import subprocess
@@ -1006,12 +1008,15 @@ elif menu == "App Builder":
                                 except Exception:
                                     pass
                                 app_path = os.path.join(output_dir, "app.py")
-                                new_port = get_free_port(avoid_port=current_vessel_port)
-                                cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--server.port", str(new_port), "--server.headless", "true"]
-                                st.session_state["local_app_proc"] = subprocess.Popen(cmd)
-                                st.session_state["local_app_port"] = new_port
-                                st.session_state["local_app_launched"] = True
-                                st.rerun()
+                                try:
+                                    new_port = get_free_port(avoid_port=current_vessel_port)
+                                    cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--server.port", str(new_port), "--server.headless", "true"]
+                                    st.session_state["local_app_proc"] = subprocess.Popen(cmd)
+                                    st.session_state["local_app_port"] = new_port
+                                    st.session_state["local_app_launched"] = True
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Restart error: {e}")
                         with c_stp:
                             if st.button("⏹️ Stop", use_container_width=True, help="Stop local app process"):
                                 try:
@@ -1026,12 +1031,15 @@ elif menu == "App Builder":
                         if st.button(f"▶️ Launch Local ({suggested_port})", type="primary", use_container_width=True):
                             app_path = os.path.join(output_dir, "app.py")
                             if os.path.exists(app_path):
-                                target_port = get_free_port(avoid_port=current_vessel_port)
-                                cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--server.port", str(target_port), "--server.headless", "true"]
-                                st.session_state["local_app_proc"] = subprocess.Popen(cmd)
-                                st.session_state["local_app_port"] = target_port
-                                st.session_state["local_app_launched"] = True
-                                st.rerun()
+                                try:
+                                    target_port = get_free_port(avoid_port=current_vessel_port)
+                                    cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--server.port", str(target_port), "--server.headless", "true"]
+                                    st.session_state["local_app_proc"] = subprocess.Popen(cmd)
+                                    st.session_state["local_app_port"] = target_port
+                                    st.session_state["local_app_launched"] = True
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Launch error: {e}")
                             else:
                                 st.error("No app.py found.")
                         st.caption(f"Port: `{suggested_port}` (avoiding Vessel)")
