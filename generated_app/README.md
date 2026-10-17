@@ -1,6 +1,6 @@
 # Generated Application
 
-**Requirement:** Build a simple **Ping Pong game** using HTML, CSS, and JavaScript. Create a paddle on each side, a bouncing ball, and a scoreboard. Let the player control the left paddle using keyboard arrow keys and make the AI control the right paddle. Add collision detection, scoring, a start/restart button, and a clean retro arcade-style design. Ensure the game is fully functional and responsive.
+**Requirement:** Build an arcade Neon Brick Breaker game with paddle bounce angles, multi-colored glowing brick layout, exploding brick debris particles, sound effects via Web Audio API, falling power-ups, and SQLite high score tracking.
 
 **Format:** Streamlit Web App
 

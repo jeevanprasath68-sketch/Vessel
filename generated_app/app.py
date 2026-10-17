@@ -1,796 +1,701 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import sqlite3
 import pandas as pd
 from datetime import datetime
-from typing import Dict, List, Any, Optional
 
-DB_NAME = "ping_pong_arcade.db"
+# ==========================================
+# BACKEND BUSINESS LOGIC & DATABASE ENGINE
+# ==========================================
 
-# --- DATABASE ENGINE & SELF-HEALING SCHEMA ---
-class DatabaseEngine:
-    @staticmethod
-    def get_connection() -> sqlite3.Connection:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+class GameConfig:
+    DIFFICULTIES = {
+        "Casual": {"speed": 4.0, "paddle_width": 120, "lives": 5, "multiplier": 1.0},
+        "Standard": {"speed": 6.0, "paddle_width": 100, "lives": 3, "multiplier": 1.5},
+        "Pro": {"speed": 8.0, "paddle_width": 80, "lives": 2, "multiplier": 2.0},
+        "Impossible": {"speed": 10.5, "paddle_width": 65, "lives": 1, "multiplier": 3.0}
+    }
 
-    @classmethod
-    def init_db(cls):
-        conn = cls.get_connection()
+class LeaderboardDB:
+    def __init__(self, db_path="brick_breaker.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        # Create tables if not exist
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS matches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                player_name TEXT NOT NULL,
-                player_score INTEGER NOT NULL,
-                ai_score INTEGER NOT NULL,
-                difficulty TEXT NOT NULL,
-                winner TEXT NOT NULL,
-                played_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS high_scores (
-                player_name TEXT PRIMARY KEY,
-                high_score INTEGER NOT NULL,
-                games_played INTEGER NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_name TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                difficulty TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
         ''')
+        conn.commit()
         
-        # Defensive column check & migration for matches
-        cursor.execute("PRAGMA table_info(matches)")
+        # Self-healing schema check
+        cursor.execute("PRAGMA table_info(high_scores)")
         columns = [col[1] for col in cursor.fetchall()]
         if "difficulty" not in columns:
-            cursor.execute("ALTER TABLE matches ADD COLUMN difficulty TEXT DEFAULT 'Medium'")
-            
-        conn.commit()
+            cursor.execute("ALTER TABLE high_scores ADD COLUMN difficulty TEXT DEFAULT 'Standard'")
+            conn.commit()
+        if "created_at" not in columns:
+            cursor.execute("ALTER TABLE high_scores ADD COLUMN created_at TEXT DEFAULT ''")
+            conn.commit()
         conn.close()
 
-    @classmethod
-    def reset_db(cls):
-        conn = cls.get_connection()
+    def add_score(self, player_name: str, score: int, difficulty: str):
+        if not player_name.strip():
+            player_name = "Anonymous"
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("DROP TABLE IF EXISTS matches")
         cursor.execute(
-            "DROP TABLE IF EXISTS high_scores"
+            "INSERT INTO high_scores (player_name, score, difficulty, created_at) VALUES (?, ?, ?, ?)",
+            (player_name.strip(), int(score), difficulty, datetime.now().strftime("%Y-%m-%d %H:%M"))
         )
         conn.commit()
         conn.close()
-        cls.init_db()
 
-    @classmethod
-    def save_match(cls, player_name: str, p_score: int, ai_score: int, difficulty: str) -> bool:
-        try:
-            conn = cls.get_connection()
-            cursor = conn.cursor()
-            winner = player_name if p_score > ai_score else ("AI Bot" if ai_score > p_score else "Tie")
-            
+    def get_top_scores(self, limit=10, difficulty=None):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if difficulty and difficulty != "All":
             cursor.execute(
-                "INSERT INTO matches (player_name, player_score, ai_score, difficulty, winner) VALUES (?, ?, ?, ?, ?)",
-                (player_name, p_score, ai_score, difficulty, winner)
+                "SELECT player_name, score, difficulty, created_at FROM high_scores WHERE difficulty = ? ORDER BY score DESC LIMIT ?",
+                (difficulty, limit)
             )
-            
-            # Update high scores
-            cursor.execute("SELECT high_score, games_played FROM high_scores WHERE player_name = ?", (player_name,))
-            row = cursor.fetchone()
-            if row:
-                new_high = max(row["high_score"], p_score)
-                new_games = row["games_played"] + 1
-                cursor.execute(
-                    "UPDATE high_scores SET high_score = ?, games_played = ?, updated_at = CURRENT_TIMESTAMP WHERE player_name = ?",
-                    (new_high, new_games, player_name)
-                )
-            else:
-                cursor.execute(
-                    "INSERT INTO high_scores (player_name, high_score, games_played) VALUES (?, ?, 1)",
-                    (player_name, p_score)
-                )
-                
-            conn.commit()
-            conn.close()
-            return True
-        except Exception as e:
-            print(f"Database error: {e}")
-            return False
+        else:
+            cursor.execute(
+                "SELECT player_name, score, difficulty, created_at FROM high_scores ORDER BY score DESC LIMIT ?",
+                (limit,)
+            )
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
 
-    @classmethod
-    def get_leaderboard(cls) -> pd.DataFrame:
-        try:
-            conn = cls.get_connection()
-            df = pd.read_sql_query("SELECT player_name, high_score, games_played, updated_at FROM high_scores ORDER BY high_score DESC LIMIT 10", conn)
-            conn.close()
-            return df
-        except Exception:
-            return pd.DataFrame(columns=["player_name", "high_score", "games_played", "updated_at"])
+    def get_stats(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*), MAX(score), AVG(score) FROM high_scores")
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0] > 0:
+            return {"total_games": row[0], "max_score": row[1] or 0, "avg_score": int(row[2] or 0)}
+        return {"total_games": 0, "max_score": 0, "avg_score": 0}
 
-    @classmethod
-    def get_match_history(cls) -> pd.DataFrame:
-        try:
-            conn = cls.get_connection()
-            df = pd.read_sql_query("SELECT id, player_name, player_score, ai_score, difficulty, winner, played_at FROM matches ORDER BY played_at DESC LIMIT 20", conn)
-            conn.close()
-            return df
-        except Exception:
-            return pd.DataFrame(columns=["id", "player_name", "player_score", "ai_score", "difficulty", "winner", "played_at"])
+    def reset_leaderboard(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM high_scores")
+        conn.commit()
+        conn.close()
 
+# ==========================================
+# HTML5 CANVAS GAME FRONTEND
+# ==========================================
 
-# --- BUSINESS LOGIC / GAME VALIDATOR --- 
-class GameValidator:
-    @staticmethod
-    def validate_score(player_score: int, ai_score: int) -> bool:
-        if not isinstance(player_score, int) or not isinstance(ai_score, int):
-            return False
-        if player_score < 0 or ai_score < 0:
-            return False
-        return True
+def get_game_html(difficulty="Standard"): 
+    config = GameConfig.DIFFICULTIES.get(difficulty, GameConfig.DIFFICULTIES["Standard"])
+    speed = config["speed"]
+    paddle_w = config["paddle_width"]
+    lives = config["lives"]
+    mult = config["multiplier"]
 
-    @staticmethod
-    def calculate_match_stats(df_matches: pd.DataFrame) -> Dict[str, Any]:
-        if df_matches.empty:
-            return {"total_matches": 0, "avg_player_score": 0.0, "player_win_rate": 0.0}
-        total = len(df_matches)
-        avg_score = df_matches["player_score"].mean()
-        # Count matches where winner is not AI and not Tie
-        wins = len(df_matches[df_matches["winner"].str.contains(r"AI|Tie", case=False, na=False) == False])
-        win_rate = (wins / total) * 100 if total > 0 else 0.0
-        return {
-            "total_matches": total,
-            "avg_player_score": round(avg_score, 1),
-            "player_win_rate": round(win_rate, 1)
-        }
-
-
-# --- HTML/JS PONG GAME COMPONENT --- 
-def get_pong_html(difficulty: str) -> str:
-    # Map difficulty to AI speed/reaction
-    ai_speeds = {"Easy": 0.04, "Medium": 0.07, "Hard": 0.12, "Legendary": 0.18}
-    ai_speed = ai_speeds.get(difficulty, 0.07)
-    winning_score = 5
-
-    raw_html = """
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <meta charset="utf-8">
-        <style>
-            * { box-sizing: border-box; user-select: none; }
-            body {
-                background: #060913;
-                color: #00f3ff;
-                font-family: 'Courier New', Courier, monospace;
-                text-align: center;
-                margin: 0;
-                padding: 10px 0;
-                overflow: hidden;
-            }
-            #game-container {
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-            }
-            .arcade-header {
-                font-size: 1.4rem;
-                font-weight: 800;
-                color: #00f3ff;
-                text-shadow: 0 0 10px #00f3ff, 0 0 20px #00f3ff;
-                letter-spacing: 3px;
-                margin-bottom: 4px;
-            }
-            .instructions {
-                font-size: 0.8rem;
-                color: #94a3b8;
-                margin-bottom: 8px;
-            }
-            canvas {
-                border: 2px solid #00f3ff;
-                box-shadow: 0 0 25px rgba(0, 243, 255, 0.35), inset 0 0 15px rgba(0, 243, 255, 0.2);
-                background: #030611;
-                border-radius: 8px;
-                cursor: pointer;
-            }
-            .controls-hint {
-                margin-top: 8px;
-                font-size: 0.8rem;
-                color: #cbd5e1;
-            }
-            .key {
-                background: #1e293b;
-                border: 1px solid #334155;
-                padding: 2px 7px;
-                border-radius: 4px;
-                color: #00f3ff;
-                font-weight: bold;
-            }
-        </style>
+    <style>
+        body {{ background: #060814; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: 'Courier New', monospace; }}
+        canvas {{ background: #0a0e1a; box-shadow: 0 0 30px #00f3ff44, inset 0 0 20px #000000; border: 2px solid #00f3ff88; border-radius: 8px; cursor: none; }}
+        #ui-overlay {{ position: absolute; top: 10px; color: #fff; font-size: 14px; pointer-events: none; text-shadow: 0 0 8px #00f3ff; }}
+    </style>
     </head>
     <body>
-        <div id="game-container">
-            <div class="arcade-header">&#127918; NEON CYBER PONG ARCADE</div>
-            <div class="instructions">Difficulty: __DIFFICULTY__ | First to __WINNING_SCORE__ Wins | Sound &amp; Mouse Enabled</div>
-            <canvas id="pongCanvas" width="700" height="400"></canvas>
-            <div class="controls-hint">
-                Controls: Drag <span class="key">Mouse/Touch</span> or use <span class="key">&#9650;</span> <span class="key">&#9660;</span> / <span class="key">W/S</span> &bull; <span class="key">P</span> to Pause &bull; Click Mute icon to toggle audio
-            </div>
-        </div>
+    <canvas id="gameCanvas" width="800" height="560"></canvas>
+    <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
 
-        <script>
-            const canvas = document.getElementById("pongCanvas");
-            const ctx = canvas.getContext("2d");
+    const INIT_SPEED = {speed};
+    const PADDLE_W_INIT = {paddle_w};
+    const INIT_LIVES = {lives};
+    const SCORE_MULT = {mult};
 
-            // Web Audio Synthesizer (Procedural Sound Engine)
-            const AudioEngine = {
-                ctx: null,
-                muted: false,
-                init() {
-                    if (!this.ctx) {
-                        const AC = window.AudioContext || window.webkitAudioContext;
-                        if (AC) this.ctx = new AC();
-                    }
-                    if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
-                },
-                playTone(freq, type, duration, endFreq) {
-                    if (this.muted) return;
-                    try {
-                        this.init();
-                        if (!this.ctx) return;
-                        const osc = this.ctx.createOscillator();
-                        const gain = this.ctx.createGain();
-                        osc.type = type || "sine";
-                        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-                        if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, this.ctx.currentTime + duration);
-                        gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
-                        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-                        osc.connect(gain);
-                        gain.connect(this.ctx.destination);
-                        osc.start();
-                        osc.stop(this.ctx.currentTime + duration);
-                    } catch(e) {}
-                },
-                hit() { this.playTone(380, "square", 0.06, 180); },
-                wall() { this.playTone(280, "sine", 0.05, 360); },
-                score() {
-                    this.playTone(523, "sine", 0.12);
-                    setTimeout(() => this.playTone(659, "sine", 0.18), 100);
-                    setTimeout(() => this.playTone(784, "sine", 0.25), 200);
-                },
-                gameOver() { this.playTone(300, "sawtooth", 0.35, 120); }
-            };
+    const AudioEngine = {{
+        ctx: null,
+        muted: false,
+        init() {{
+            if (!this.ctx) {{
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (AC) this.ctx = new AC();
+            }}
+            if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+        }},
+        playTone(freq, type, duration, endFreq) {{
+            if (this.muted) return;
+            try {{
+                this.init();
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = type || 'sine';
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, this.ctx.currentTime + duration);
+                gain.gain.setValueAtTime(0.12, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            }} catch(e) {{}}
+        }},
+        hit() {{ this.playTone(440, 'square', 0.05, 220); }},
+        paddleHit() {{ this.playTone(300, 'triangle', 0.08, 450); }},
+        score() {{ this.playTone(523, 'sine', 0.08); setTimeout(() => this.playTone(659, 'sine', 0.12), 60); }},
+        powerup() {{ this.playTone(784, 'sine', 0.1, 1046); }},
+        explode() {{ this.playTone(150, 'sawtooth', 0.2, 50); }},
+        laser() {{ this.playTone(880, 'square', 0.06, 440); }},
+        gameOver() {{ this.playTone(220, 'sawtooth', 0.3, 110); }}
+    }};
 
-            // Game State Machine: 0 = MENU, 1 = PLAYING, 2 = PAUSED, 3 = GAME_OVER
-            let gameState = 0;
-            let winnerText = "";
-            let screenShake = 0;
+    let gameState = 'START';
+    let score = 0;
+    let lives = INIT_LIVES;
+    let level = 1;
+    let screenShake = 0;
 
-            // Background Stardust Particles
-            const stars = [];
-            for (let i = 0; i < 45; i++) {
-                stars.push({
-                    x: Math.random() * canvas.width,
-                    y: Math.random() * canvas.height,
-                    size: Math.random() * 1.8 + 0.5,
-                    alpha: Math.random() * 0.7 + 0.2,
-                    speed: Math.random() * 0.4 + 0.1
-                });
-            }
+    let paddle = {{
+        x: canvas.width / 2 - PADDLE_W_INIT / 2,
+        y: canvas.height - 35,
+        w: PADDLE_W_INIT,
+        h: 14,
+        dx: 0,
+        speed: 9,
+        laserTimer: 0
+    }};
 
-            // Explosion Sparks Particle Engine
-            let particles = [];
-            function spawnSparks(x, y, color, count = 16) {
-                for (let i = 0; i < count; i++) {
-                    const angle = Math.random() * Math.PI * 2;
-                    const speed = Math.random() * 4 + 1.5;
-                    particles.push({
-                        x: x,
-                        y: y,
-                        vx: Math.cos(angle) * speed,
-                        vy: Math.sin(angle) * speed,
-                        radius: Math.random() * 2.5 + 1,
-                        alpha: 1,
-                        decay: Math.random() * 0.03 + 0.02,
-                        color: color
-                    });
-                }
-            }
+    let ball = {{
+        x: canvas.width / 2,
+        y: canvas.height - 60,
+        r: 8,
+        dx: INIT_SPEED * 0.7,
+        dy: -INIT_SPEED,
+        speed: INIT_SPEED,
+        sticky: false
+    }};
 
-            // Game entities
-            const ball = {
-                x: canvas.width / 2,
-                y: canvas.height / 2,
-                radius: 8,
-                speed: 5.5,
-                velocityX: 5.5,
-                velocityY: 5.5,
-                color: "#ffe600"
-            };
+    let bricks = [];
+    let particles = [];
+    let powerups = [];
+    let lasers = [];
+    let stars = [];
 
-            const player = {
-                x: 14,
-                y: canvas.height / 2 - 42,
-                width: 14,
-                height: 84,
-                score: 0,
-                color: "#00f3ff"
-            };
+    for(let i=0; i<60; i++) {{
+        stars.push({{
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            size: Math.random() * 2,
+            speed: 0.2 + Math.random() * 0.8
+        }});
+    }};
 
-            const ai = {
-                x: canvas.width - 28,
-                y: canvas.height / 2 - 42,
-                width: 14,
-                height: 84,
-                score: 0,
-                color: "#ff007f"
-            };
+    function initBricks() {{
+        bricks = [];
+        const rows = 5;
+        const cols = 9;
+        const padding = 10;
+        const offsetTop = 50;
+        const offsetLeft = 45;
+        const width = (canvas.width - (offsetLeft * 2) - (padding * (cols - 1))) / cols;
+        const height = 22;
 
-            // Controls
-            let upPressed = false;
-            let downPressed = false;
+        const colors = ['#ff007f', '#ff7f00', '#ffe600', '#00ff66', '#00f3ff'];
 
-            window.addEventListener("keydown", (e) => {
-                AudioEngine.init();
-                if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") {
-                    upPressed = true;
-                    e.preventDefault();
-                }
-                if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") {
-                    downPressed = true;
-                    e.preventDefault();
-                }
-                if (e.code === "Space") {
-                    e.preventDefault();
-                    if (gameState === 0) gameState = 1;
-                    else if (gameState === 3) resetMatch();
-                }
-                if (e.key === "p" || e.key === "P" || e.key === "Escape") {
-                    if (gameState === 1) gameState = 2;
-                    else if (gameState === 2) gameState = 1;
-                }
-            });
+        for(let r=0; r<rows; r++) {{
+            for(let c=0; c<cols; c++) {{
+                let hasPower = Math.random() < 0.18;
+                let pType = ['laser', 'expand', 'multi', 'life'][Math.floor(Math.random()*4)];
+                bricks.push({{
+                    x: offsetLeft + c * (width + padding),
+                    y: offsetTop + r * (height + padding),
+                    w: width,
+                    h: height,
+                    status: 1,
+                    color: colors[r],
+                    hasPower: hasPower,
+                    powerType: pType,
+                    hp: r === 0 ? 2 : 1
+                }});
+            }}
+        }}
+    }}
 
-            window.addEventListener("keyup", (e) => {
-                if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") upPressed = false;
-                if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") downPressed = false;
-            });
+    let keys = {{}};
+    window.addEventListener('keydown', e => {{
+        AudioEngine.init();
+        if(['Space', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
+        keys[e.code] = true;
+        if(e.code === 'Space') {{
+            if(gameState === 'START' || gameState === 'GAMEOVER' || gameState === 'VICTORY') {{
+                resetGame();
+                gameState = 'PLAYING';
+            }} else if(ball.sticky) {{
+                ball.sticky = false;
+                ball.dy = -ball.speed;
+            }}
+        }}
+        if(e.code === 'KeyP') {{
+            if(gameState === 'PLAYING') gameState = 'PAUSED';
+            else if(gameState === 'PAUSED') gameState = 'PLAYING';
+        }}
+    }});
 
-            // Mouse & Touch Controls
-            canvas.addEventListener("mousemove", (e) => {
-                const rect = canvas.getBoundingClientRect();
-                const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
-                player.y = Math.max(0, Math.min(canvas.height - player.height, mouseY - player.height / 2));
-            });
+    window.addEventListener('keyup', e => {{ keys[e.code] = false; }});
+    canvas.addEventListener('mousemove', e => {{
+        AudioEngine.init();
+        const rect = canvas.getBoundingClientRect();
+        let mouseX = e.clientX - rect.left;
+        paddle.x = mouseX - paddle.w / 2;
+        if(paddle.x < 0) paddle.x = 0;
+        if(paddle.x + paddle.w > canvas.width) paddle.x = canvas.width - paddle.w;
 
-            canvas.addEventListener("touchmove", (e) => {
-                e.preventDefault();
-                const rect = canvas.getBoundingClientRect();
-                const touchY = (e.touches[0].clientY - rect.top) * (canvas.height / rect.height);
-                player.y = Math.max(0, Math.min(canvas.height - player.height, touchY - player.height / 2));
-            }, { passive: false });
+        if(ball.sticky) {{
+            ball.x = paddle.x + paddle.w / 2;
+        }}
+    }});
 
-            canvas.addEventListener("click", (e) => {
-                AudioEngine.init();
-                const rect = canvas.getBoundingClientRect();
-                const clickX = (e.clientX - rect.left) * (canvas.width / rect.width);
-                const clickY = (e.clientY - rect.top) * (canvas.height / rect.height);
+    canvas.addEventListener('mousedown', () => {{
+        AudioEngine.init();
+        if(gameState === 'START' || gameState === 'GAMEOVER' || gameState === 'VICTORY') {{
+            resetGame();
+            gameState = 'PLAYING';
+        }} else if(ball.sticky) {{
+            ball.sticky = false;
+            ball.dy = -ball.speed;
+        }} else if(paddle.laserTimer > 0) {{
+            lasers.push({{x: paddle.x + 12, y: paddle.y, w: 4, h: 14}});
+            lasers.push({{x: paddle.x + paddle.w - 16, y: paddle.y, w: 4, h: 14}});
+            AudioEngine.laser();
+        }}
+    }});
 
-                // Check Mute button click (top-right corner: x: 650..690, y: 10..40)
-                if (clickX >= 640 && clickX <= 690 && clickY >= 10 && clickY <= 40) {
-                    AudioEngine.muted = !AudioEngine.muted;
-                    return;
-                }
+    function resetGame() {{
+        score = 0;
+        lives = INIT_LIVES;
+        level = 1;
+        paddle.w = PADDLE_W_INIT;
+        paddle.laserTimer = 0;
+        resetBall();
+        initBricks();
+    }}
 
-                if (gameState === 0) gameState = 1;
-                else if (gameState === 2) gameState = 1;
-                else if (gameState === 3) resetMatch();
-            });
+    function resetBall() {{
+        ball.x = paddle.x + paddle.w / 2;
+        ball.y = paddle.y - 12;
+        ball.speed = INIT_SPEED + (level - 1) * 0.8;
+        ball.dx = ball.speed * (Math.random() > 0.5 ? 0.6 : -0.6);
+        ball.dy = -ball.speed;
+        ball.sticky = true;
+    }}
 
-            function collision(b, p) {
-                return (
-                    b.x + b.radius > p.x &&
-                    b.x - b.radius < p.x + p.width &&
-                    b.y + b.radius > p.y &&
-                    b.y - b.radius < p.y + p.height
-                );
-            }
+    function spawnParticles(x, y, color) {{
+        for(let i=0; i<16; i++) {{
+            let angle = Math.random() * Math.PI * 2;
+            let speed = 1 + Math.random() * 5;
+            particles.push({{
+                x: x,
+                y: y,
+                dx: Math.cos(angle) * speed,
+                dy: Math.sin(angle) * speed,
+                r: 2 + Math.random() * 3,
+                color: color,
+                alpha: 1.0,
+                decay: 0.02 + Math.random() * 0.03
+            }});
+        }}
+    }}
 
-            function resetBall(direction) {
-                ball.x = canvas.width / 2;
-                ball.y = canvas.height / 2;
-                ball.speed = 5.5;
-                ball.velocityX = (direction || 1) * ball.speed;
-                ball.velocityY = (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 3 + 3);
-            }
+    function spawnPowerup(x, y, type) {{
+        powerups.push({{
+            x: x,
+            y: y,
+            w: 26,
+            h: 14,
+            type: type,
+            dy: 2.2
+        }});
+    }}
 
-            function resetMatch() {
-                player.score = 0;
-                ai.score = 0;
-                gameState = 1;
-                resetBall(1);
-            }
+    initBricks();
 
-            function update() {
-                // Update stars
-                for (let star of stars) {
-                    star.x -= star.speed;
-                    if (star.x < 0) star.x = canvas.width;
-                }
+    let lastTime = performance.now();
 
-                // Update particles
-                for (let i = particles.length - 1; i >= 0; i--) {
-                    const p = particles[i];
-                    p.x += p.vx;
-                    p.y += p.vy;
-                    p.alpha -= p.decay;
-                    if (p.alpha <= 0) particles.splice(i, 1);
-                }
+    function gameLoop(now) {{
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
 
-                if (screenShake > 0) screenShake--;
+        update(dt);
+        render();
 
-                if (gameState !== 1) return;
+        requestAnimationFrame(gameLoop);
+    }}
 
-                // Keyboard Movement
-                if (upPressed && player.y > 0) player.y -= 7.5;
-                if (downPressed && player.y < canvas.height - player.height) player.y += 7.5;
+    function update(dt) {{
+        if(gameState !== 'PLAYING') return;
 
-                // AI movement with smart tracking
-                const aiTarget = ball.y - ai.height / 2;
-                ai.y += (aiTarget - ai.y) * __AI_SPEED__;
-                ai.y = Math.max(0, Math.min(canvas.height - ai.height, ai.y));
+        if(screenShake > 0) screenShake -= dt * 15;
 
-                // Ball Movement
-                ball.x += ball.velocityX;
-                ball.y += ball.velocityY;
+        if(keys['ArrowLeft'] || keys['KeyA']) paddle.x -= paddle.speed;
+        if(keys['ArrowRight'] || keys['KeyD']) paddle.x += paddle.speed;
+        if(paddle.x < 0) paddle.x = 0;
+        if(paddle.x + paddle.w > canvas.width) paddle.x = canvas.width - paddle.w;
 
-                // Wall Collision (Top and Bottom)
-                if (ball.y - ball.radius <= 0) {
-                    ball.y = ball.radius;
-                    ball.velocityY = Math.abs(ball.velocityY);
-                    AudioEngine.wall();
-                    spawnSparks(ball.x, ball.y, "#ffe600", 8);
-                } else if (ball.y + ball.radius >= canvas.height) {
-                    ball.y = canvas.height - ball.radius;
-                    ball.velocityY = -Math.abs(ball.velocityY);
-                    AudioEngine.wall();
-                    spawnSparks(ball.x, ball.y, "#ffe600", 8);
-                }
+        if(ball.sticky) {{
+            ball.x = paddle.x + paddle.w / 2;
+        }} else {{
+            ball.x += ball.dx;
+            ball.y += ball.dy;
 
-                // Paddle Collision
-                const activePaddle = (ball.x < canvas.width / 2) ? player : ai;
-                if (collision(ball, activePaddle)) {
-                    AudioEngine.hit();
-                    const collidePoint = (ball.y - (activePaddle.y + activePaddle.height / 2)) / (activePaddle.height / 2);
-                    const angleRad = (Math.PI / 4) * Math.max(-1, Math.min(1, collidePoint));
-                    const direction = (ball.x < canvas.width / 2) ? 1 : -1;
+            if(ball.x - ball.r < 0) {{ ball.x = ball.r; ball.dx *= -1; AudioEngine.hit(); }}
+            if(ball.x + ball.r > canvas.width) {{ ball.x = canvas.width - ball.r; ball.dx *= -1; AudioEngine.hit(); }}
+            if(ball.y - ball.r < 0) {{ ball.y = ball.r; ball.dy *= -1; AudioEngine.hit(); }}
 
-                    ball.speed = Math.min(ball.speed + 0.35, 12);
-                    ball.velocityX = direction * ball.speed * Math.cos(angleRad);
-                    ball.velocityY = ball.speed * Math.sin(angleRad);
-                    spawnSparks(ball.x, ball.y, activePaddle.color, 16);
-                    screenShake = 3;
-                }
+            if(ball.y > canvas.height) {{
+                lives--;
+                screenShake = 5;
+                AudioEngine.gameOver();
+                if(lives <= 0) {{
+                    gameState = 'GAMEOVER';
+                }} else {{
+                    resetBall();
+                }}
+            }}
 
-                // Scoring
-                if (ball.x - ball.radius < 0) {
-                    ai.score++;
+            if(
+                ball.y + ball.r >= paddle.y &&
+                ball.y - ball.r <= paddle.y + paddle.h &&
+                ball.x >= paddle.x &&
+                ball.x <= paddle.x + paddle.w
+            ) {{
+                AudioEngine.paddleHit();
+                let hitPos = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+                let angle = hitPos * (Math.PI / 3);
+                let currentSpeed = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
+                ball.dx = currentSpeed * Math.sin(angle);
+                ball.dy = -Math.abs(currentSpeed * Math.cos(angle));
+                ball.y = paddle.y - ball.r;
+            }}
+
+            let activeBricks = 0;
+            for(let b of bricks) {{
+                if(b.status === 1) {{
+                    activeBricks++;
+                    if(
+                        ball.x + ball.r > b.x &&
+                        ball.x - ball.r < b.x + b.w &&
+                        ball.y + ball.r > b.y &&
+                        ball.y - ball.r < b.y + b.h
+                    ) {{
+                        b.hp--;
+                        if(b.hp <= 0) {{
+                            b.status = 0;
+                            score += Math.round(10 * SCORE_MULT);
+                            AudioEngine.score();
+                            spawnParticles(b.x + b.w/2, b.y + b.h/2, b.color);
+                            if(b.hasPower) spawnPowerup(b.x + b.w/2, b.y + b.h/2, b.powerType);
+                        }} else {{
+                            AudioEngine.hit();
+                        }}
+                        ball.dy *= -1;
+                    }}
+                }}
+            }}
+
+            if(activeBricks === 0) {{
+                level++;
+                AudioEngine.score();
+                initBricks();
+                resetBall();
+            }}
+        }}
+
+        if(paddle.laserTimer > 0) paddle.laserTimer -= dt;
+
+        for(let i = lasers.length - 1; i >= 0; i--) {{
+            lasers[i].y -= 9;
+            if(lasers[i].y < 0) {{
+                lasers.splice(i, 1);
+                continue;
+            }}
+            for(let b of bricks) {{
+                if(b.status === 1 &&
+                   lasers[i].x > b.x && lasers[i].x < b.x + b.w &&
+                   lasers[i].y > b.y && lasers[i].y < b.y + b.h) {{
+                    b.status = 0;
+                    score += Math.round(10 * SCORE_MULT);
                     AudioEngine.score();
-                    spawnSparks(ball.x, ball.y, ai.color, 25);
-                    screenShake = 6;
-                    if (ai.score >= __WINNING_SCORE__) {
-                        gameState = 3;
-                        winnerText = "AI WINS! 🤖";
-                        AudioEngine.gameOver();
-                    } else {
-                        resetBall(1);
-                    }
-                } else if (ball.x + ball.radius > canvas.width) {
-                    player.score++;
-                    AudioEngine.score();
-                    spawnSparks(ball.x, ball.y, player.color, 25);
-                    screenShake = 6;
-                    if (player.score >= __WINNING_SCORE__) {
-                        gameState = 3;
-                        winnerText = "PLAYER WINS! 🏆";
-                        AudioEngine.score();
-                    } else {
-                        resetBall(-1);
-                    }
-                }
-            }
+                    spawnParticles(b.x + b.w/2, b.y + b.h/2, b.color);
+                    lasers.splice(i, 1);
+                    break;
+                }}
+            }}
+        }}
 
-            function render() {
+        for(let i = powerups.length - 1; i >= 0; i--) {{
+            let p = powerups[i];
+            p.y += p.dy;
+            if(
+                p.y + p.h >= paddle.y &&
+                p.y <= paddle.y + paddle.h &&
+                p.x + p.w >= paddle.x &&
+                p.x <= paddle.x + paddle.w
+            ) {{
+                AudioEngine.powerup();
+                if(p.type === 'expand') {{
+                    paddle.w = Math.min(paddle.w + 30, 160);
+                }} else if(p.type === 'laser') {{
+                    paddle.laserTimer = 12;
+                }} else if(p.type === 'life') {{
+                    lives++;
+                }} else if(p.type === 'multi') {{
+                    ball.speed *= 1.1;
+                }}
+                powerups.splice(i, 1);
+            }} else if(p.y > canvas.height) {{
+                powerups.splice(i, 1);
+            }}
+        }}
+
+        for(let i = particles.length - 1; i >= 0; i--) {{
+            let pt = particles[i];
+            pt.x += pt.dx;
+            pt.y += pt.dy;
+            pt.alpha -= pt.decay;
+            if(pt.alpha <= 0) particles.splice(i, 1);
+        }}
+
+        for(let s of stars) {{
+            s.y += s.speed;
+            if(s.y > canvas.height) s.y = 0;
+        }}
+    }}
+
+    function render() {{
+        ctx.save();
+        if(screenShake > 0) {{
+            let shakeX = (Math.random() - 0.5) * screenShake;
+            let shakeY = (Math.random() - 0.5) * screenShake;
+            ctx.translate(shakeX, shakeY);
+        }}
+
+        ctx.fillStyle = '#0a0e1a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#ffffff44';
+        for(let s of stars) {{
+            ctx.fillRect(s.x, s.y, s.size, s.size);
+        }}
+
+        for(let b of bricks) {{
+            if(b.status === 1) {{
                 ctx.save();
-                if (screenShake > 0) {
-                    const dx = (Math.random() - 0.5) * 6;
-                    const dy = (Math.random() - 0.5) * 6;
-                    ctx.translate(dx, dy);
-                }
-
-                // Clear canvas with deep space gradient
-                const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-                bgGrad.addColorStop(0, "#050814");
-                bgGrad.addColorStop(1, "#030409");
-                ctx.fillStyle = bgGrad;
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                // Draw background stars
-                for (let star of stars) {
-                    ctx.fillStyle = "rgba(255, 255, 255, " + star.alpha + ")";
-                    ctx.beginPath();
-                    ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-
-                // Draw center net with glowing dashed line
-                ctx.save();
-                ctx.shadowBlur = 8;
-                ctx.shadowColor = "rgba(0, 243, 255, 0.4)";
-                ctx.strokeStyle = "rgba(0, 243, 255, 0.25)";
-                ctx.lineWidth = 2;
-                ctx.setLineDash([8, 8]);
-                ctx.beginPath();
-                ctx.moveTo(canvas.width / 2, 0);
-                ctx.lineTo(canvas.width / 2, canvas.height);
-                ctx.stroke();
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = b.color;
+                ctx.fillStyle = b.color;
+                ctx.fillRect(b.x, b.y, b.w, b.h);
+                
+                ctx.fillStyle = '#ffffff33';
+                ctx.fillRect(b.x + 2, b.y + 2, b.w - 4, 4);
+                if(b.hp > 1) {{
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeRect(b.x + 3, b.y + 3, b.w - 6, b.h - 6);
+                }}
                 ctx.restore();
+            }}
+        }}
 
-                // Draw Scores
-                ctx.save();
-                ctx.font = "bold 44px 'Courier New', monospace";
-                ctx.textAlign = "center";
-                ctx.shadowBlur = 12;
-                ctx.shadowColor = "#00f3ff";
-                ctx.fillStyle = "#00f3ff";
-                ctx.fillText(player.score, canvas.width / 4, 65);
-                ctx.shadowColor = "#ff007f";
-                ctx.fillStyle = "#ff007f";
-                ctx.fillText(ai.score, 3 * canvas.width / 4, 65);
-                ctx.restore();
+        for(let p of powerups) {{
+            ctx.save();
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = '#ffe600';
+            ctx.fillStyle = '#ffe600';
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 10px Courier New';
+            ctx.fillText(p.type.toUpperCase().substring(0,3), p.x + 3, p.y + 11);
+            ctx.restore();
+        }}
 
-                // Draw Player Paddle (Neon Cyan Glow)
-                ctx.save();
-                ctx.shadowBlur = 15;
-                ctx.shadowColor = player.color;
-                ctx.fillStyle = player.color;
-                ctx.fillRect(player.x, player.y, player.width, player.height);
-                ctx.restore();
+        ctx.save();
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = '#00f3ff';
+        ctx.fillStyle = '#00f3ff';
+        for(let l of lasers) {{
+            ctx.fillRect(l.x, l.y, l.w, l.h);
+        }}
+        ctx.restore();
 
-                // Draw AI Paddle (Neon Magenta Glow)
-                ctx.save();
-                ctx.shadowBlur = 15;
-                ctx.shadowColor = ai.color;
-                ctx.fillStyle = ai.color;
-                ctx.fillRect(ai.x, ai.y, ai.width, ai.height);
-                ctx.restore();
+        ctx.save();
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = paddle.laserTimer > 0 ? '#ff007f' : '#00f3ff';
+        ctx.fillStyle = paddle.laserTimer > 0 ? '#ff007f' : '#00f3ff';
+        ctx.fillRect(paddle.x, paddle.y, paddle.w, paddle.h);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(paddle.x + 8, paddle.y + 2, paddle.w - 16, 3);
+        ctx.restore();
 
-                // Draw Ball (Neon Yellow Glow)
-                ctx.save();
-                ctx.shadowBlur = 18;
-                ctx.shadowColor = ball.color;
-                ctx.fillStyle = ball.color;
-                ctx.beginPath();
-                ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.restore();
+        ctx.save();
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = '#00ff66';
+        ctx.fillStyle = '#00ff66';
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
 
-                // Draw Particles
-                for (let p of particles) {
-                    ctx.save();
-                    ctx.shadowBlur = 8;
-                    ctx.shadowColor = p.color;
-                    ctx.fillStyle = p.color;
-                    ctx.globalAlpha = Math.max(0, p.alpha);
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.restore();
-                }
+        for(let pt of particles) {{
+            ctx.save();
+            ctx.globalAlpha = pt.alpha;
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = pt.color;
+            ctx.fillStyle = pt.color;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }}
 
-                // Draw Sound Mute Toggle Icon at top-right
-                ctx.save();
-                ctx.font = "16px sans-serif";
-                ctx.textAlign = "right";
-                ctx.fillStyle = AudioEngine.muted ? "#64748b" : "#00f3ff";
-                ctx.fillText(AudioEngine.muted ? "🔇 MUTED" : "🔊 SOUND", canvas.width - 15, 28);
-                ctx.restore();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 14px Courier New';
+        ctx.shadowBlur = 6;
+        ctx.shadowColor = '#00f3ff';
+        ctx.fillText("SCORE: " + score, 20, 28);
+        ctx.fillText("LIVES: " + "❤ ".repeat(lives), 220, 28);
+        ctx.fillText("LEVEL: " + level, 460, 28);
+        if(paddle.laserTimer > 0) {{
+            ctx.fillStyle = '#ff007f';
+            ctx.fillText("LASER: " + paddle.laserTimer.toFixed(1) + "s", 590, 28);
+        }}
 
-                // STATE OVERLAYS
-                if (gameState === 0) {
-                    // Menu / Title Screen
-                    ctx.fillStyle = "rgba(4, 7, 18, 0.85)";
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.save();
-                    ctx.textAlign = "center";
-                    ctx.shadowBlur = 20;
-                    ctx.shadowColor = "#00f3ff";
-                    ctx.fillStyle = "#00f3ff";
-                    ctx.font = "bold 32px 'Courier New', monospace";
-                    ctx.fillText("NEON CYBER PONG", canvas.width / 2, canvas.height / 2 - 40);
+        if(gameState === 'START') {{
+            ctx.fillStyle = 'rgba(6, 8, 20, 0.85)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = '#00f3ff';
+            ctx.fillStyle = '#00f3ff';
+            ctx.font = 'bold 36px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText("NEON BRICK BREAKER", canvas.width/2, canvas.height/2 - 40);
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px Courier New';
+            ctx.fillText("CLICK OR PRESS SPACE TO START", canvas.width/2, canvas.height/2 + 10);
+            ctx.fillStyle = '#ffe600';
+            ctx.font = '13px Courier New';
+            ctx.fillText("Move mouse or use Arrow keys / A & D to steer paddle", canvas.width/2, canvas.height/2 + 50);
+            ctx.textAlign = 'left';
+        }} else if(gameState === 'PAUSED') {{
+            ctx.fillStyle = 'rgba(6, 8, 20, 0.7)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = '#ffe600';
+            ctx.fillStyle = '#ffe600';
+            ctx.font = 'bold 32px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText("GAME PAUSED", canvas.width/2, canvas.height/2);
+            ctx.font = '14px Courier New';
+            ctx.fillStyle = '#fff';
+            ctx.fillText("Press 'P' to Resume", canvas.width/2, canvas.height/2 + 35);
+            ctx.textAlign = 'left';
+        }} else if(gameState === 'GAMEOVER') {{
+            ctx.fillStyle = 'rgba(6, 8, 20, 0.9)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.shadowBlur = 25;
+            ctx.shadowColor = '#ff007f';
+            ctx.fillStyle = '#ff007f';
+            ctx.font = 'bold 38px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText("GAME OVER", canvas.width/2, canvas.height/2 - 30);
+            ctx.fillStyle = '#fff';
+            ctx.font = '18px Courier New';
+            ctx.fillText("Final Score: " + score, canvas.width/2, canvas.height/2 + 15);
+            ctx.font = '14px Courier New';
+            ctx.fillStyle = '#00f3ff';
+            ctx.fillText("Click or Press Space to Play Again", canvas.width/2, canvas.height/2 + 55);
+            ctx.textAlign = 'left';
+        }}
 
-                    const pulse = Math.abs(Math.sin(Date.now() / 350));
-                    ctx.shadowBlur = 10 * pulse;
-                    ctx.fillStyle = "#ffe600";
-                    ctx.font = "bold 16px 'Courier New', monospace";
-                    ctx.fillText("CLICK OR PRESS SPACE TO START", canvas.width / 2, canvas.height / 2 + 15);
+        ctx.restore();
+    }}
 
-                    ctx.fillStyle = "#94a3b8";
-                    ctx.font = "12px 'Courier New', monospace";
-                    ctx.fillText("Move: Mouse Drag or Arrow Keys / W-S | P: Pause", canvas.width / 2, canvas.height / 2 + 55);
-                    ctx.restore();
-                } else if (gameState === 2) {
-                    // Paused Screen
-                    ctx.fillStyle = "rgba(4, 7, 18, 0.75)";
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.save();
-                    ctx.textAlign = "center";
-                    ctx.shadowBlur = 15;
-                    ctx.shadowColor = "#ffe600";
-                    ctx.fillStyle = "#ffe600";
-                    ctx.font = "bold 28px 'Courier New', monospace";
-                    ctx.fillText("PAUSED", canvas.width / 2, canvas.height / 2 - 10);
-                    ctx.fillStyle = "#94a3b8";
-                    ctx.font = "14px 'Courier New', monospace";
-                    ctx.fillText("PRESS 'P' OR CLICK TO RESUME", canvas.width / 2, canvas.height / 2 + 30);
-                    ctx.restore();
-                } else if (gameState === 3) {
-                    // Game Over Screen
-                    ctx.fillStyle = "rgba(4, 7, 18, 0.85)";
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.save();
-                    ctx.textAlign = "center";
-                    ctx.shadowBlur = 20;
-                    ctx.shadowColor = player.score >= __WINNING_SCORE__ ? "#00f3ff" : "#ff007f";
-                    ctx.fillStyle = player.score >= __WINNING_SCORE__ ? "#00f3ff" : "#ff007f";
-                    ctx.font = "bold 34px 'Courier New', monospace";
-                    ctx.fillText(winnerText, canvas.width / 2, canvas.height / 2 - 40);
-
-                    ctx.shadowBlur = 8;
-                    ctx.fillStyle = "#ffffff";
-                    ctx.font = "bold 18px 'Courier New', monospace";
-                    ctx.fillText("FINAL SCORE: " + player.score + " - " + ai.score, canvas.width / 2, canvas.height / 2 + 5);
-
-                    ctx.fillStyle = "#ffe600";
-                    ctx.font = "bold 15px 'Courier New', monospace";
-                    ctx.fillText("PRESS SPACE OR CLICK TO PLAY AGAIN", canvas.width / 2, canvas.height / 2 + 45);
-
-                    ctx.fillStyle = "#94a3b8";
-                    ctx.font = "12px 'Courier New', monospace";
-                    ctx.fillText("Record your score below in the Leaderboard form!", canvas.width / 2, canvas.height / 2 + 75);
-                    ctx.restore();
-                }
-
-                ctx.restore();
-            }
-
-            function gameLoop() {
-                update();
-                render();
-                requestAnimationFrame(gameLoop);
-            }
-
-            gameLoop();
-        </script>
+    requestAnimationFrame(gameLoop);
+    </script>
     </body>
     </html>
     """
 
-    return raw_html.replace("__DIFFICULTY__", difficulty).replace("__AI_SPEED__", str(ai_speed)).replace("__WINNING_SCORE__", str(winning_score))
+# ==========================================
+# STREAMLIT USER INTERFACE
+# ==========================================
 
-
-# --- STREAMLIT USER INTERFACE --- 
 def main():
     st.set_page_config(
-        page_title="Retro Arcade Ping Pong",
-        page_icon="🏓",
+        page_title="Neon Brick Breaker Arcade",
+        page_icon="⚡",
         layout="wide",
         initial_sidebar_state="expanded"
     )
 
-    # Initialize Database
-    DatabaseEngine.init_db()
+    db = LeaderboardDB()
 
-    # Custom Retro Styling
-    st.markdown(
-        """
-        <style>
-            .main-title {
-                font-size: 2.5rem;
-                color: #00ffcc;
-                text-shadow: 0 0 12px rgba(0, 255, 204, 0.6);
-                font-family: 'Courier New', Courier, monospace;
-                font-weight: bold;
-                margin-bottom: 0px;
-            }
-            .subtitle {
-                color: #8b949e;
-                font-size: 1.1rem;
-                margin-bottom: 20px;
-            }
-            .metric-card {
-                background-color: #161b22;
-                border: 1px solid #30363d;
-                padding: 15px;
-                border-radius: 8px;
-                text-align: center;
-            }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.markdown('<div class="main-title">🏓 RETRO ARCADE PING PONG</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Classic 2-Player arcade showdown against intelligent AI. Built with Streamlit & HTML5 Canvas.</div>', unsafe_allow_html=True)
-
-    # Sidebar Configuration & Controls
-    st.sidebar.markdown("## 🎮 Arcade Settings")
-    player_name = st.sidebar.text_input("Player Tag / Name", value="Player1", max_chars=20)
-    difficulty = st.sidebar.selectbox("AI Difficulty", ["Easy", "Medium", "Hard", "Legendary"], index=1)
-    
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 💾 Match Saver")
-    st.sidebar.info("Finished a game? Log your score to the arcade high-score board below!")
-    
-    with st.sidebar.form("save_form"):
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            p_score_input = st.number_input("Your Score", min_value=0, max_value=10, value=5)
-        with col_s2:
-            ai_score_input = st.number_input("AI Score", min_value=0, max_value=10, value=2)
+    with st.sidebar:
+        st.title("⚡ Arcade Control")
+        difficulty = st.selectbox("Select Difficulty", list(GameConfig.DIFFICULTIES.keys()), index=1)
         
-        submitted = st.form_submit_button("📥 Save Match Result")
-        if submitted:
-            if GameValidator.validate_score(p_score_input, ai_score_input):
-                success = DatabaseEngine.save_match(player_name, p_score_input, ai_score_input, difficulty)
-                if success:
-                    st.sidebar.success(f"Score saved for {player_name}!")
-                else:
-                    st.sidebar.error("Failed to save score.")
-            else:
-                st.sidebar.error("Invalid score values provided.")
+        st.markdown("---")
+        st.subheader("Submit High Score")
+        with st.form("score_form"):
+            player_name = st.text_input("Player Name", "CyberGamer")
+            final_score = st.number_input("Final Score achieved", min_value=0, step=10, value=150)
+            submitted = st.form_submit_button("Record Score")
+            if submitted:
+                db.add_score(player_name, final_score, difficulty)
+                st.success(f"Saved score for {player_name}!")
 
-    # Database Maintenance
-    with st.sidebar.expander("⚙️ Database & Maintenance"):
-        if st.button("🗑️ Reset Arcade Database", type="primary"):
-            DatabaseEngine.reset_db()
-            st.sidebar.success("Database successfully wiped and re-initialized!")
-            st.rerun()
+        st.markdown("---")
+        st.subheader("Database Management")
+        with st.expander("Danger Zone"):
+            if st.button("Reset Leaderboard DB", type="primary"):
+                db.reset_leaderboard()
+                st.warning("Leaderboard wiped successfully!")
+                st.rerun()
 
-    # Layout: Game Window & Stats Dashboard
-    col_game, col_dash = st.columns([2.2, 1])
+    st.title("⚡ Neon Synthwave Brick Breaker")
+    st.markdown("Destroy glowing synth blocks, collect falling power-ups (**EXPAND, LASER, LIFE**), and dominate the neon leaderboard!")
 
-    with col_game:
-        st.markdown("### 🕹️ Live Arena")
-        # Embed HTML/JS Game inside Streamlit Component
-        from streamlit.components.v1 import html
-        html(get_pong_html(difficulty), height=480, scrolling=False)
+    stats = db.get_stats()
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Active Difficulty", difficulty)
+    col2.metric("Total Games Recorded", stats["total_games"])
+    col3.metric("All-Time High Score", stats["max_score"])
+    col4.metric("Average Score", stats["avg_score"])
 
-    with col_dash:
-        st.markdown("### 🏆 Arcade Leaderboard")
-        df_leaderboard = DatabaseEngine.get_leaderboard()
-        if not df_leaderboard.empty:
-            st.dataframe(df_leaderboard, use_container_width=True, hide_index=True)
-        else:
-            st.info("No high scores recorded yet. Be the first!")
+    st.markdown("### 🕹️ Game Arena")
+    components.html(get_game_html(difficulty), height=600)
 
-        st.markdown("### 📈 Career Statistics")
-        df_matches = DatabaseEngine.get_match_history()
-        stats = GameValidator.calculate_match_stats(df_matches)
-        
-        m1, m2 = st.columns(2)
-        m1.metric("Total Matches", stats["total_matches"])
-        m2.metric(
-            "Win Rate", f"{stats['player_win_rate']}%")
-
-    # Full Match History Table
     st.markdown("---")
-    st.markdown("### 📜 Recent Match History")
-    if not df_matches.empty:
-        st.dataframe(df_matches, use_container_width=True, hide_index=True)
+    st.subheader("🏆 Neon Hall of Fame")
+    filter_diff = st.selectbox("Filter Leaderboard by Difficulty", ["All"] + list(GameConfig.DIFFICULTIES.keys()))
+    
+    scores = db.get_top_scores(limit=10, difficulty=filter_diff)
+    if scores:
+        df = pd.DataFrame(scores, columns=["Player Name", "Score", "Difficulty", "Date"])
+        st.dataframe(df, use_container_width=True, hide_index=True)
     else:
-        st.markdown("*No recent match history available.*")
+        st.info("No high scores recorded yet. Be the first to submit one!")
 
-
-if __name__ == "__mainmain__" or __name__ == "__main__":
+if __name__ == "__main__":
     main()

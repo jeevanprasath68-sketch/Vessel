@@ -437,6 +437,23 @@ DEFAULT_REPO_URL = "https://github.com/jeevanprasath68-sketch/generated.git"
 output_dir = os.path.join(os.getcwd(), "generated_app")
 os.makedirs(output_dir, exist_ok=True)
 
+def get_free_port(avoid_port: int = 8501) -> int:
+    """Finds an unused, available TCP port on localhost, strictly avoiding Vessel's port."""
+    import socket
+    for p in range(8502, 8540):
+        if p == avoid_port:
+            continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    return 8505
+
+current_vessel_port = st.get_option("server.port") or 8501
+
 if "active_api_key" not in st.session_state:
     st.session_state["active_api_key"] = DEFAULT_API_KEY
 
@@ -974,17 +991,50 @@ elif menu == "App Builder":
             with st.container(border=True):
                 col_l1, col_l2, col_l3, col_l4, col_l5 = st.columns([1.5, 1.4, 1.3, 1.1, 1.1])
                 with col_l1:
-                    if st.button("▶️ Launch Local (8502)", type="primary", use_container_width=True):
-                        app_path = os.path.join(output_dir, "app.py")
-                        if os.path.exists(app_path):
-                            import sys
-                            cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--server.port", "8502", "--server.headless", "true"]
-                            subprocess.Popen(cmd)
-                            st.session_state["local_app_launched"] = True
-                        else:
-                            st.error("No app.py found.")
-                    if st.session_state.get("local_app_launched"):
-                        st.caption("Active: [Open http://localhost:8502](http://localhost:8502)")
+                    proc = st.session_state.get("local_app_proc")
+                    is_proc_running = proc and (proc.poll() is None)
+                    current_app_port = st.session_state.get("local_app_port")
+
+                    if is_proc_running and current_app_port:
+                        st.link_button(f"🟢 Open App ({current_app_port}) ↗", f"http://localhost:{current_app_port}", type="primary", use_container_width=True)
+                        c_rst, c_stp = st.columns(2)
+                        with c_rst:
+                            if st.button("🔄 Restart", use_container_width=True, help="Restart local app process"):
+                                try:
+                                    proc.terminate()
+                                    proc.wait(timeout=2)
+                                except Exception:
+                                    pass
+                                app_path = os.path.join(output_dir, "app.py")
+                                new_port = get_free_port(avoid_port=current_vessel_port)
+                                cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--server.port", str(new_port), "--server.headless", "true"]
+                                st.session_state["local_app_proc"] = subprocess.Popen(cmd)
+                                st.session_state["local_app_port"] = new_port
+                                st.session_state["local_app_launched"] = True
+                                st.rerun()
+                        with c_stp:
+                            if st.button("⏹️ Stop", use_container_width=True, help="Stop local app process"):
+                                try:
+                                    proc.terminate()
+                                except Exception:
+                                    pass
+                                st.session_state["local_app_proc"] = None
+                                st.session_state["local_app_launched"] = False
+                                st.rerun()
+                    else:
+                        suggested_port = get_free_port(avoid_port=current_vessel_port)
+                        if st.button(f"▶️ Launch Local ({suggested_port})", type="primary", use_container_width=True):
+                            app_path = os.path.join(output_dir, "app.py")
+                            if os.path.exists(app_path):
+                                target_port = get_free_port(avoid_port=current_vessel_port)
+                                cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--server.port", str(target_port), "--server.headless", "true"]
+                                st.session_state["local_app_proc"] = subprocess.Popen(cmd)
+                                st.session_state["local_app_port"] = target_port
+                                st.session_state["local_app_launched"] = True
+                                st.rerun()
+                            else:
+                                st.error("No app.py found.")
+                        st.caption(f"Port: `{suggested_port}` (avoiding Vessel)")
                 with col_l2:
                     if st.button("🚀 Push to GitHub", help="Manually push current build to origin/main", use_container_width=True):
                         with st.spinner("Pushing to GitHub origin/main..."):
@@ -1025,8 +1075,16 @@ elif menu == "App Builder":
                     )
                 with col_l5:
                     if st.button("➕ New App", help="Clear results and start fresh", use_container_width=True):
+                        old_proc = st.session_state.get("local_app_proc")
+                        if old_proc and old_proc.poll() is None:
+                            try:
+                                old_proc.terminate()
+                            except Exception:
+                                pass
                         st.session_state.pop("last_run_state", None)
                         st.session_state.pop("local_app_launched", None)
+                        st.session_state.pop("local_app_proc", None)
+                        st.session_state.pop("local_app_port", None)
                         build_mgr.reset()
                         st.rerun()
 
