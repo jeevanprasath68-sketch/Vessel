@@ -271,23 +271,61 @@ class MultiAgentOrchestrator:
             try:
                 import subprocess
                 remote_check = subprocess.run(["git", "remote", "get-url", "origin"], cwd=output_dir, capture_output=True, text=True)
-                if remote_check.returncode == 0:
+                if remote_check.returncode == 0 and remote_check.stdout.strip():
                     remote_url = remote_check.stdout.strip()
+                    
+                    # Ensure git identity is set
+                    subprocess.run(["git", "config", "user.name", "Vessel Studio"], cwd=output_dir, capture_output=True)
+                    subprocess.run(["git", "config", "user.email", "vessel@autonomous.build"], cwd=output_dir, capture_output=True)
+
                     # Untrack any accidentally tracked .db or .sqlite files
                     subprocess.run(["git", "rm", "--cached", "-f", "*.db", "*.sqlite", "*.sqlite3"], cwd=output_dir, capture_output=True)
+                    
                     # Stage all additions, updates, and deletions
                     subprocess.run(["git", "add", "-A"], cwd=output_dir, capture_output=True)
-                    commit_msg = f"Update generated app: {user_prompt[:50]}..."
+                    
+                    clean_title = user_prompt.splitlines()[0][:60].replace('"', "'")
+                    commit_msg = f"Update generated app: {clean_title}"
                     subprocess.run(["git", "commit", "-m", commit_msg], cwd=output_dir, capture_output=True)
-                    push_res = subprocess.run(["git", "push", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
+                    
+                    # Push with auto-retry on non-fast-forward
+                    push_res = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
+                    if push_res.returncode != 0:
+                        # Attempt pull rebase and push again in case remote was ahead
+                        subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=output_dir, capture_output=True)
+                        push_res = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
+
                     if push_res.returncode == 0:
-                        git_sync_status = f"Pushed latest app to {remote_url}"
+                        rev_check = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=output_dir, capture_output=True, text=True)
+                        commit_hash = rev_check.stdout.strip() if rev_check.returncode == 0 else "HEAD"
+                        git_sync_status = {
+                            "success": True,
+                            "remote_url": remote_url,
+                            "commit_hash": commit_hash,
+                            "message": f"Successfully pushed commit {commit_hash} to {remote_url}. Streamlit Cloud will auto-deploy!"
+                        }
                         yield {
                             "event": "GIT_PUSH_DONE",
                             "agent": "Git Sync",
-                            "message": f"Auto-synced and pushed updates to {remote_url}. Streamlit Cloud will auto-deploy!"
+                            "message": f"Auto-synced and pushed updates ({commit_hash}) to {remote_url}. Streamlit Cloud will auto-deploy!",
+                            "data": git_sync_status
+                        }
+                    else:
+                        err_msg = (push_res.stderr or push_res.stdout or "Push rejected").strip()
+                        git_sync_status = {
+                            "success": False,
+                            "remote_url": remote_url,
+                            "error": err_msg,
+                            "message": f"Git push failed: {err_msg}"
+                        }
+                        yield {
+                            "event": "GIT_PUSH_ERROR",
+                            "agent": "Git Sync",
+                            "message": f"Git auto-push encountered error: {err_msg}",
+                            "data": git_sync_status
                         }
             except Exception as e:
+                git_sync_status = {"success": False, "error": str(e), "message": f"Git auto-push error: {e}"}
                 print(f"[Warning] Git auto-push encountered error: {e}")
 
         pipeline_state["git_sync_status"] = git_sync_status

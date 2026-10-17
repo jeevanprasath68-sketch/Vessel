@@ -119,7 +119,11 @@ class BuildManager:
                         self.progress = 90
                         self.status_message = "[REVIEW] QA audit finalized."
                     elif event_type == "GIT_PUSH_DONE":
-                        self.status_message = "[DEPLOY] Synced to remote GitHub repository."
+                        remote_name = event.get("data", {}).get("remote_url", "GitHub")
+                        self.status_message = f"[DEPLOY] Synced to {remote_name}."
+                    elif event_type == "GIT_PUSH_ERROR":
+                        err_text = event.get("data", {}).get("error", message)
+                        self.status_message = f"[DEPLOY WARNING] GitHub sync issue: {err_text}"
                     elif event_type == "PIPELINE_COMPLETE":
                         self.progress = 100
                         self.status_message = "PIPELINE COMPLETE // APPLICATION DEPLOYED"

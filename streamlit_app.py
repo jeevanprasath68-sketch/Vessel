@@ -957,11 +957,24 @@ elif menu == "App Builder":
             review = state.get("review", {})
             tests = state.get("latest_test_result", {})
 
+            # Live Cloud Sync & GitHub Status Banner
+            sync_info = state.get("git_sync_status")
+            if sync_info and isinstance(sync_info, dict):
+                if sync_info.get("success"):
+                    chash = sync_info.get("commit_hash", "")
+                    rurl = sync_info.get("remote_url", connected_remote)
+                    st.success(f"🚀 **Auto-Deployed to GitHub & Streamlit Cloud** &bull; Commit `{chash}` synced to [{rurl}]({rurl}). Streamlit Cloud will auto-redeploy within seconds!")
+                else:
+                    err_msg = sync_info.get("error", "Push failed")
+                    st.warning(f"⚠️ **GitHub Sync Notice:** {err_msg} (Use 'Push to GitHub' below to retry).")
+            elif sync_info and isinstance(sync_info, str):
+                st.success(f"🚀 **Auto-Deployed:** {sync_info}")
+
             # Primary Action Bar Container
             with st.container(border=True):
-                col_l1, col_l2, col_l3, col_l4 = st.columns([1.8, 1.8, 1.2, 1.2])
+                col_l1, col_l2, col_l3, col_l4, col_l5 = st.columns([1.5, 1.4, 1.3, 1.1, 1.1])
                 with col_l1:
-                    if st.button("Launch Local Web App (Port 8502)", type="primary", use_container_width=True):
+                    if st.button("▶️ Launch Local (8502)", type="primary", use_container_width=True):
                         app_path = os.path.join(output_dir, "app.py")
                         if os.path.exists(app_path):
                             import sys
@@ -971,11 +984,32 @@ elif menu == "App Builder":
                         else:
                             st.error("No app.py found.")
                     if st.session_state.get("local_app_launched"):
-                        st.success("App active on port 8502")
-                        st.markdown("**[Open Local App: http://localhost:8502](http://localhost:8502)**")
+                        st.caption("Active: [Open http://localhost:8502](http://localhost:8502)")
                 with col_l2:
-                    st.link_button("View on Streamlit Cloud ↗", "https://share.streamlit.io", use_container_width=True)
+                    if st.button("🚀 Push to GitHub", help="Manually push current build to origin/main", use_container_width=True):
+                        with st.spinner("Pushing to GitHub origin/main..."):
+                            subprocess.run(["git", "add", "-A"], cwd=output_dir)
+                            subprocess.run(["git", "commit", "-m", f"Manual sync: {time.strftime('%Y-%m-%d %H:%M:%S')}"], cwd=output_dir)
+                            push_p = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
+                            if push_p.returncode != 0:
+                                subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=output_dir, capture_output=True)
+                                push_p = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
+                            if push_p.returncode == 0:
+                                rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=output_dir, capture_output=True, text=True).stdout.strip()
+                                if "last_run_state" in st.session_state:
+                                    st.session_state["last_run_state"]["git_sync_status"] = {
+                                        "success": True,
+                                        "remote_url": connected_remote,
+                                        "commit_hash": rev,
+                                        "message": f"Pushed {rev}"
+                                    }
+                                st.success(f"Pushed commit `{rev}` to GitHub! Streamlit Cloud redeploying.")
+                                st.rerun()
+                            else:
+                                st.error(f"Push failed: {push_p.stderr or push_p.stdout}")
                 with col_l3:
+                    st.link_button("View on GitHub ↗", connected_remote, use_container_width=True)
+                with col_l4:
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                         zip_file.writestr("app.py", state.get("current_app_code", ""))
@@ -989,8 +1023,8 @@ elif menu == "App Builder":
                         mime="application/zip",
                         use_container_width=True
                     )
-                with col_l4:
-                    if st.button("➕ Start New App", help="Clear results and start fresh", use_container_width=True):
+                with col_l5:
+                    if st.button("➕ New App", help="Clear results and start fresh", use_container_width=True):
                         st.session_state.pop("last_run_state", None)
                         st.session_state.pop("local_app_launched", None)
                         build_mgr.reset()
