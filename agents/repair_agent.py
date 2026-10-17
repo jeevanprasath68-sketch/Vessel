@@ -13,7 +13,8 @@ Guidelines:
 5. CRITICAL UI PRESERVATION: If `app.py` contains a Streamlit UI (`import streamlit as st`, widgets, pages), YOU MUST PRESERVE AND RETURN THE ENTIRE UI AT THE BOTTOM OF `app.py`. NEVER drop or omit the UI code when fixing logic!
 6. DATABASE RESILIENCE: If the failure is `sqlite3.OperationalError` (e.g. missing column, no such table), ensure `app.py` performs safe schema migration (`PRAGMA table_info` and `ALTER TABLE ... ADD COLUMN`) and defensive try/except handling so existing database files don't crash the app.
 7. JAVASCRIPT / EMBEDDED HTML NameError: If the failure is `NameError` occurring inside embedded JavaScript or HTML (e.g. `${var}` or `${obj.prop}` inside an f-string), convert the JavaScript template literal to standard string concatenation (e.g. `"Score: " + var`) or remove the `f` prefix from the string and use `.replace()`. Never allow Python f-strings to evaluate JS identifiers.
-8. You MUST return your response strictly as a JSON object:
+8. GAME & CANVAS PRESERVATION: If `app.py` contains an HTML5 Canvas game or interactive simulation inside `components.html(...)`, you MUST PRESERVE the complete HTML, CSS, JavaScript, Web Audio synthesizer, and canvas animation loop. Never replace it with a placeholder or empty dummy string.
+9. You MUST return your response strictly as a JSON object:
 {
   "explanation": "Clear explanation of the root cause and what changes were made to fix it.",
   "app_code": "# full complete updated Python code for app.py (never return null)",

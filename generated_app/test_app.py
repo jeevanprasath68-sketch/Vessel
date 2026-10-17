@@ -1,74 +1,71 @@
 import pytest
-import os
+import pandas as pd
 import sqlite3
-from app import ArcadeDB, GameConfig, DB_FILE
+import os
+from app import DatabaseEngine, GameValidator, DB_NAME
 
 @pytest.fixture(autouse=True)
-def setup_db():
-    # Setup fresh DB for testing
-    if os.path.exists(DB_FILE):
-        os.remove(DB_FILE)
-    ArcadeDB.init_db()
+def setup_test_db():
+    # Use a test database or reset before/after tests
+    DatabaseEngine.init_db()
     yield
-    if os.path.exists(DB_FILE):
-        os.remove(DB_FILE)
+    # Cleanup optional
 
-def test_database_initialization():
-    """Test that database and tables are correctly initialized."""
-    conn = ArcadeDB.get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='high_scores'")
-    table = cursor.fetchone()
-    conn.close()
-    assert table is not None
+def test_score_validator_happy_path():
+    assert GameValidator.validate_score(5, 2) is True
+    assert GameValidator.validate_score(0, 0) is True
+    assert GameValidator.validate_score(10, 8) is True
 
-def test_add_and_get_score():
-    """Test adding a score and retrieving the leaderboard."""
-    ArcadeDB.add_score("TestPlayer", 7, 3, "Normal")
-    leaderboard = ArcadeDB.get_leaderboard(limit=5)
-    
-    assert len(leaderboard) == 1
-    assert leaderboard[0]["player_name"] == "TestPlayer"
-    assert leaderboard[0]["score"] == 7
-    assert leaderboard[0]["ai_score"] == 3
-    assert leaderboard[0]["difficulty"] == "Normal"
+def test_score_validator_edge_cases():
+    # Negative scores are invalid
+    assert GameValidator.validate_score(-1, 3) is False
+    # Non-integer inputs should return False
+    assert GameValidator.validate_score("5", 2) is False # type: ignore
+    assert GameValidator.validate_score(5, None) is False # type: ignore
 
-def test_global_stats_increment():
-    """Test global match and points statistics tracking."""
-    stats_before = ArcadeDB.get_global_stats()
-    assert stats_before["total_matches"] == 0
-    assert stats_before["total_points_scored"] == 0
-
-    ArcadeDB.add_score(
-        player_name="Champ",
-        score=10,
-        ai_score=8,
-        difficulty="Hard"
-    )
-
-    stats_after = ArcadeDB.get_global_stats()
-    assert stats_after["total_matches"] == 1
-    assert stats_after["total_points_scored"] == 18
-
-def test_clear_database():
-    """Test clearing the database wipes scores and resets stats."""
-    ArcadeDB.add_score("RetroKing", 5, 1, "Easy")
-    assert len(ArcadeDB.get_leaderboard()) == 1
-
-    ArcadeDB.clear_database()
-    assert len(ArcadeDB.get_leaderboard()) == 0
-    stats = ArcadeDB.get_global_stats()
+def test_calculate_match_stats_empty():
+    empty_df = pd.DataFrame(columns=["id", "player_name", "player_score", "ai_score", "difficulty", "winner", "played_at"])
+    stats = GameValidator.calculate_match_stats(empty_df)
     assert stats["total_matches"] == 0
+    assert stats["avg_player_score"] == 0.0
+    assert stats["player_win_rate"] == 0.0
 
-def test_game_config_difficulties():
-    """Test that all game configuration levels are well-defined."""
-    assert "Easy" in GameConfig.DIFFICULTIES
-    assert "Normal" in GameConfig.DIFFICULTIES
-    assert "Hard" in GameConfig.DIFFICULTIES
-    assert "Extreme" in GameConfig.DIFFICULTIES
-    
-    for diff, cfg in GameConfig.DIFFICULTIES.items():
-        assert "ai_speed" in cfg
-        assert "ball_speed" in cfg
-        assert "target_score" in cfg
-        assert cfg["target_score"] > 0
+def test_calculate_match_stats_populated():
+    data = {
+        "id": [1, 2, 3],
+        "player_name": ["TestUser", "TestUser", "TestUser"],
+        "player_score": [5, 2, 5],
+        "ai_score": [3, 5, 1],
+        "difficulty": ["Medium", "Hard", "Easy"],
+        "winner": ["TestUser", "AI Bot", "TestUser"],
+        "played_at": ["2023-10-01 10:00:00", "2023-10-01 10:05:00", "2023-10-01 10:10:00"]
+    }
+    df = pd.DataFrame(data)
+    stats = GameValidator.calculate_match_stats(df)
+    assert stats["total_matches"] == 3
+    assert stats["avg_player_score"] == 4.0
+    assert stats["player_win_rate"] == 66.7
+
+def test_database_persistence_and_retrieval():
+    # Test saving match data and retrieving leaderboard/history
+    success = DatabaseEngine.save_match("PyTestHero", 5, 1, "Hard")
+    assert success is True
+
+    leaderboard = DatabaseEngine.get_leaderboard()
+    assert not leaderboard.empty
+    assert "PyTestHero" in leaderboard["player_name"].values
+
+    history = DatabaseEngine.get_match_history()
+    assert not history.empty
+    match_record = history[history["player_name"] == "PyTestHero"]
+    assert len(match_record) > 0
+    assert match_record.iloc[0]["player_score"] == 5
+
+def test_database_self_healing_schema():
+    # Ensure init_db runs smoothly without raising exceptions even if run repeatedly
+    try:
+        DatabaseEngine.init_db()
+        DatabaseEngine.init_db()
+        assert True
+    except Exception as e:
+        pytest.fail(f"Database self-healing schema initialization failed with error: {e}")

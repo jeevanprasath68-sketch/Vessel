@@ -834,6 +834,10 @@ elif menu == "App Builder":
                 "Quick Templates",
                 options=[
                     "Load a template...",
+                    "🎮 Neon Cyber Pong (Web Audio & Particles)",
+                    "🚀 Galaxy Space Shooter (Waves & Power-ups)",
+                    "🐍 Cyberpunk Neon Snake (Speed Scaling)",
+                    "🧱 Neon Brick Breaker DX (Particles & Drops)",
                     "Campus Lost & Found Portal",
                     "Personal Finance & Budget Dashboard",
                     "Prioritized Task & Project Manager",
@@ -844,6 +848,10 @@ elif menu == "App Builder":
             if template_choice != "Load a template..." and template_choice != st.session_state.get("prev_template"):
                 st.session_state["prev_template"] = template_choice
                 templates = {
+                    "🎮 Neon Cyber Pong (Web Audio & Particles)": "Build an arcade-grade Neon Cyber Pong game with glowing canvas visuals, procedural Web Audio sound synthesizer (hits, scores, game over), particle explosion effects, smart AI difficulty scaling, start/pause screens, mouse and keyboard controls, and persistent SQLite leaderboard.",
+                    "🚀 Galaxy Space Shooter (Waves & Power-ups)": "Build an arcade Galaxy Space Shooter game featuring retro glowing vector ships, procedural laser and explosion sounds via Web Audio, dynamic particle sparks, progressive enemy waves, power-up shields/multishot, and a persistent SQLite high-score table.",
+                    "🐍 Cyberpunk Neon Snake (Speed Scaling)": "Build an arcade Cyberpunk Neon Snake game with glowing neon grid, food pickup particles, synthesized audio chimes, combo multiplier system, wrap-around or wall collision options, and persistent high score leaderboard.",
+                    "🧱 Neon Brick Breaker DX (Particles & Drops)": "Build an arcade Neon Brick Breaker game with paddle bounce angles, multi-colored glowing brick layout, exploding brick debris particles, sound effects via Web Audio API, falling power-ups, and SQLite high score tracking.",
                     "Campus Lost & Found Portal": "Build a functional web application called CampusFind — College Lost & Found Portal using Python and Streamlit with search, category filtering, persistent database, and claim reporting.",
                     "Personal Finance & Budget Dashboard": "Build a comprehensive personal finance dashboard with income/expense logging, category breakdown charts, monthly budget tracker, and CSV export.",
                     "Prioritized Task & Project Manager": "Build a Task and TaskManager application with priority sorting (1-5), completion status tracking, search filtering, and metrics dashboard.",

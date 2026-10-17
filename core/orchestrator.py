@@ -45,10 +45,17 @@ class MultiAgentOrchestrator:
         }
 
         # Step 1: Architect + Developer
+        from agents.architect_dev import is_game_requirement
+        is_game = is_game_requirement(user_prompt, app_type)
+        if is_game:
+            step_msg = "Detected Game / Arcade requirement — designing AAA Web Game Architecture (Neon Canvas, Web Audio Synthesizer, Particle Engine, Dual Controls & SQLite Leaderboard)..."
+        else:
+            step_msg = f"Analyzing prompt, designing architecture for '{app_type}', and generating Python code with tests..."
+
         yield {
             "event": "STAGE_START",
             "agent": "Architect + Developer",
-            "message": f"Analyzing prompt, designing architecture for '{app_type}', and generating Python code with tests..."
+            "message": step_msg
         }
 
         arch_result = self.architect_dev.run(user_prompt, app_type=app_type)

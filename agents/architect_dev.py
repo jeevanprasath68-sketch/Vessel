@@ -35,6 +35,97 @@ Rules:
 }
 """
 
+GAME_ARCHITECTURE_DIRECTIVE = """
+=== HIGHEST QUALITY INTERACTIVE GAME / ARCADE SPECIFICATION (MANDATORY FOR GAMES) ===
+The user requirement is an interactive game, arcade experience, or canvas simulation.
+You MUST deliver an arcade-grade, visually stunning, polished web game of the ABSOLUTE HIGHEST QUALITY that runs directly in the browser via `st.components.v1.html(..., height=640)`.
+
+A high-quality game MUST incorporate the following 7 Pillars:
+
+1. Visuals & Art Direction (HTML5 Canvas):
+   - Cyberpunk / Neon Synthwave theme: Deep space dark background (#060814 or #0a0e1a).
+   - Luminous Neon Glow: Add `ctx.shadowBlur = 12; ctx.shadowColor = '#00f3ff';` (or '#ff007f', '#ffe600', '#00ff66') for dynamic glowing effects on paddles, balls, lasers, enemies, and score text. Reset `ctx.shadowBlur = 0;` after drawing glowing elements.
+   - Dynamic Background: Animated floating stardust or retro vector perspective grid so the canvas feels alive at all times.
+   - Particle Engine: An embedded particle system where 12-24 glowing spark particles explode with velocity, gravity/drag, and fading alpha whenever a collision, score, hit, or explosion occurs.
+   - Screen Impact / Shake: Trigger a subtle camera shake on heavy impacts or player damage.
+   - 60 FPS Delta-Time Physics: Use `requestAnimationFrame` with delta-time calculation (`const dt = Math.min((now - lastTime) / 1000, 0.1);`) for buttery-smooth motion on all screens.
+
+2. Procedural Sound Effects via Web Audio API (Zero External Files!):
+   - Implement a lightweight, self-contained procedural sound synthesizer using browser `AudioContext`:
+     const AudioEngine = {
+         ctx: null,
+         muted: false,
+         init() {
+             if (!this.ctx) {
+                 const AC = window.AudioContext || window.webkitAudioContext;
+                 if (AC) this.ctx = new AC();
+             }
+             if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+         },
+         playTone(freq, type, duration, endFreq) {
+             if (this.muted) return;
+             try {
+                 this.init();
+                 if (!this.ctx) return;
+                 const osc = this.ctx.createOscillator();
+                 const gain = this.ctx.createGain();
+                 osc.type = type || 'sine';
+                 osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                 if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, this.ctx.currentTime + duration);
+                 gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                 gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+                 osc.connect(gain);
+                 gain.connect(this.ctx.destination);
+                 osc.start();
+                 osc.stop(this.ctx.currentTime + duration);
+             } catch(e) {}
+         },
+         hit() { this.playTone(420, 'square', 0.06, 200); },
+         score() { this.playTone(523, 'sine', 0.1); setTimeout(() => this.playTone(659, 'sine', 0.15), 80); },
+         laser() { this.playTone(880, 'sawtooth', 0.08, 220); },
+         explode() { this.playTone(180, 'triangle', 0.25, 40); },
+         gameOver() { this.playTone(330, 'sawtooth', 0.2, 165); }
+     };
+   - Initialize/resume audio on the first user click or keypress to comply with browser autoplay security policies.
+   - Provide an on-screen mute button or click toggle in the canvas HUD.
+
+3. Complete Game State Machine:
+   - State 1 (START / MENU): Glowing title, animated 'PRESS SPACE OR CLICK TO START', high score display, and clear control instructions.
+   - State 2 (PLAYING): Active game loop with live HUD (Score, High Score, Health/Lives, Difficulty Level).
+   - State 3 (PAUSED): Press 'P' or 'ESC' or click Pause button to show a sleek translucent pause screen.
+   - State 4 (GAME OVER / VICTORY): Displays Final Score, celebratory particle fireworks for new high scores, and 'PRESS SPACE OR CLICK TO PLAY AGAIN'.
+
+4. Dual Controls (Keyboard + Mouse/Touch):
+   - Keyboard: Arrow keys, WASD, Space bar. Always add `e.preventDefault()` for Arrow keys and Space bar so the page doesn't scroll!
+   - Touch & Mouse: Support `mousemove` and `touchmove` so players on laptops, trackpads, tablets, or phones can play effortlessly without a keyboard.
+
+5. Python Backend Engine & Test Suite (`test_app.py`):
+   - At the top of `app.py`, implement testable Python classes:
+     * `GameConfig` / `DifficultyManager`: Constants and methods for speeds, AI response curves, and score multipliers across difficulties.
+     * `LeaderboardDB`: SQLite manager with `init_db()`, `add_score(name, score, difficulty)`, `get_top_scores(limit=10)`, `get_stats()`, and `reset_leaderboard()`.
+   - `test_app.py` MUST import and test these backend classes directly with 5-6 passing unit tests covering initialization, score additions, stats calculation, and difficulty bounds.
+
+6. Streamlit Page Integration:
+   - Header with custom game title and difficulty selector (`st.selectbox` or `st.radio`: 'Casual', 'Standard', 'Pro', 'Impossible').
+   - Center: The HTML5 Canvas game rendered in full glory via `st.components.v1.html(..., height=640)`.
+   - Below/Beside Game: High score submission form (`st.form`) allowing players to record their final score to the SQLite leaderboard, a live Leaderboard table (`st.dataframe`), and instructions.
+
+7. JavaScript Code Safety (CRITICAL):
+   - NEVER use Python f-strings with unescaped JavaScript template literals `${var}`!
+   - ALWAYS use standard JavaScript string concatenation (e.g. `"Score: " + score`) or use a standard string without `f` and `.replace("__PARAM__", str(param))`.
+"""
+
+def is_game_requirement(prompt: str, app_type: str = "") -> bool:
+    game_keywords = [
+        "game", "arcade", "pong", "snake", "tetris", "space invaders", "shooter",
+        "flappy", "breakout", "brick", "paddle", "platformer", "racer", "racing",
+        "maze", "rpg", "puzzle", "card game", "chess", "canvas", "interactive simulation",
+        "play", "asteroid", "pacman", "frogger", "tictactoe", "tic-tac-toe", "pinball",
+        "minesweeper", "alien", "galaxy", "combat", "score", "quest"
+    ]
+    text = f"{prompt} {app_type}".lower()
+    return any(kw in text for kw in game_keywords)
+
 class ArchitectDeveloperAgent:
     """Agent 1: Generates architecture, application code (app.py), and test suite (test_app.py)."""
     
@@ -42,9 +133,21 @@ class ArchitectDeveloperAgent:
         self.client = client
 
     def run(self, user_prompt: str, app_type: str = "Streamlit Web App") -> Dict[str, Any]:
+        is_game = is_game_requirement(user_prompt, app_type)
+        if is_game:
+            extra_instructions = (
+                "\n\n==================================================\n"
+                "CRITICAL: Detected Game / Arcade requirement.\n"
+                "You must strictly apply the following AAA Game Architecture Directive:\n"
+                + GAME_ARCHITECTURE_DIRECTIVE
+            )
+        else:
+            extra_instructions = ""
+
         prompt = (
             f"User Requirement:\n\"\"\"{user_prompt}\"\"\"\n\n"
             "Generate the architecture plan, the complete Streamlit web application (`app.py`), and the pytest test suite (`test_app.py`)."
+            f"{extra_instructions}"
         )
         result = self.client.generate_json(prompt, system_instruction=ARCHITECT_DEV_PROMPT)
         
@@ -56,5 +159,6 @@ class ArchitectDeveloperAgent:
         return {
             "architecture_summary": str(result.get("architecture_summary") or "Python application and test suite generated."),
             "app_code": str(raw_app).strip(),
-            "test_code": str(raw_test).strip()
+            "test_code": str(raw_test).strip(),
+            "is_game": is_game
         }
