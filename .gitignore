@@ -27,3 +27,7 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+
+# Local Vessel Configuration & Secrets
+vessel_config.json
+.vessel_config.json

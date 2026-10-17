@@ -1,5 +1,5 @@
 import difflib
-from typing import Generator, Dict, Any, List
+from typing import Generator, Dict, Any, List, Optional
 from core.llm_client import GeminiClient
 from agents.architect_dev import ArchitectDeveloperAgent
 from agents.testing_engine import TestingEngine
@@ -24,7 +24,7 @@ class MultiAgentOrchestrator:
         self.repair_agent = RepairAgent(self.client)
         self.reviewer_agent = ReviewerAgent(self.client)
 
-    def execute_stream(self, user_prompt: str, app_type: str = "Streamlit Web App", auto_push: bool = True) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
+    def execute_stream(self, user_prompt: str, app_type: str = "Streamlit Web App", auto_push: bool = True, github_token: Optional[str] = None) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
         """
         Executes the full pipeline step-by-step, yielding progress events
         for real-time display in the Streamlit UI.
@@ -269,61 +269,28 @@ class MultiAgentOrchestrator:
         git_sync_status = None
         if auto_push and os.path.exists(os.path.join(output_dir, ".git")):
             try:
-                import subprocess
-                remote_check = subprocess.run(["git", "remote", "get-url", "origin"], cwd=output_dir, capture_output=True, text=True)
-                if remote_check.returncode == 0 and remote_check.stdout.strip():
-                    remote_url = remote_check.stdout.strip()
-                    
-                    # Ensure git identity is set
-                    subprocess.run(["git", "config", "user.name", "Vessel Studio"], cwd=output_dir, capture_output=True)
-                    subprocess.run(["git", "config", "user.email", "vessel@autonomous.build"], cwd=output_dir, capture_output=True)
+                from core.git_sync import sync_and_push
+                clean_title = user_prompt.splitlines()[0][:60].replace('"', "'")
+                commit_msg = f"Update generated app: {clean_title}"
+                git_sync_status = sync_and_push(output_dir, commit_msg, token=github_token)
 
-                    # Untrack any accidentally tracked .db or .sqlite files
-                    subprocess.run(["git", "rm", "--cached", "-f", "*.db", "*.sqlite", "*.sqlite3"], cwd=output_dir, capture_output=True)
-                    
-                    # Stage all additions, updates, and deletions
-                    subprocess.run(["git", "add", "-A"], cwd=output_dir, capture_output=True)
-                    
-                    clean_title = user_prompt.splitlines()[0][:60].replace('"', "'")
-                    commit_msg = f"Update generated app: {clean_title}"
-                    subprocess.run(["git", "commit", "-m", commit_msg], cwd=output_dir, capture_output=True)
-                    
-                    # Push with auto-retry on non-fast-forward
-                    push_res = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
-                    if push_res.returncode != 0:
-                        # Attempt pull rebase and push again in case remote was ahead
-                        subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=output_dir, capture_output=True)
-                        push_res = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
-
-                    if push_res.returncode == 0:
-                        rev_check = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=output_dir, capture_output=True, text=True)
-                        commit_hash = rev_check.stdout.strip() if rev_check.returncode == 0 else "HEAD"
-                        git_sync_status = {
-                            "success": True,
-                            "remote_url": remote_url,
-                            "commit_hash": commit_hash,
-                            "message": f"Successfully pushed commit {commit_hash} to {remote_url}. Streamlit Cloud will auto-deploy!"
-                        }
-                        yield {
-                            "event": "GIT_PUSH_DONE",
-                            "agent": "Git Sync",
-                            "message": f"Auto-synced and pushed updates ({commit_hash}) to {remote_url}. Streamlit Cloud will auto-deploy!",
-                            "data": git_sync_status
-                        }
-                    else:
-                        err_msg = (push_res.stderr or push_res.stdout or "Push rejected").strip()
-                        git_sync_status = {
-                            "success": False,
-                            "remote_url": remote_url,
-                            "error": err_msg,
-                            "message": f"Git push failed: {err_msg}"
-                        }
-                        yield {
-                            "event": "GIT_PUSH_ERROR",
-                            "agent": "Git Sync",
-                            "message": f"Git auto-push encountered error: {err_msg}",
-                            "data": git_sync_status
-                        }
+                if git_sync_status.get("success"):
+                    chash = git_sync_status.get("commit_hash", "")
+                    rurl = git_sync_status.get("remote_url", "")
+                    yield {
+                        "event": "GIT_PUSH_DONE",
+                        "agent": "Git Sync",
+                        "message": f"Auto-synced and pushed updates ({chash}) to {rurl}. Streamlit Cloud will auto-deploy!",
+                        "data": git_sync_status
+                    }
+                else:
+                    err_msg = git_sync_status.get("error", "Push failed")
+                    yield {
+                        "event": "GIT_PUSH_ERROR",
+                        "agent": "Git Sync",
+                        "message": f"Git auto-push notice: {err_msg}",
+                        "data": git_sync_status
+                    }
             except Exception as e:
                 git_sync_status = {"success": False, "error": str(e), "message": f"Git auto-push error: {e}"}
                 print(f"[Warning] Git auto-push encountered error: {e}")

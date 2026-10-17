@@ -40,7 +40,8 @@ class BuildManager:
         model: str,
         max_repairs: int = 3,
         timeout_sec: int = 20,
-        app_type: str = "Streamlit Web App"
+        app_type: str = "Streamlit Web App",
+        github_token: Optional[str] = None
     ) -> bool:
         with self._lock:
             if self.is_running and self._thread and self._thread.is_alive():
@@ -58,7 +59,7 @@ class BuildManager:
 
             self._thread = threading.Thread(
                 target=self._worker,
-                args=(user_prompt, api_key, model, max_repairs, timeout_sec, app_type),
+                args=(user_prompt, api_key, model, max_repairs, timeout_sec, app_type, github_token),
                 daemon=True
             )
             self._thread.start()
@@ -71,7 +72,8 @@ class BuildManager:
         model: str,
         max_repairs: int,
         timeout_sec: int,
-        app_type: str
+        app_type: str,
+        github_token: Optional[str] = None
     ):
         try:
             gemini_client = GeminiClient(
@@ -85,7 +87,7 @@ class BuildManager:
                 timeout_seconds=timeout_sec
             )
 
-            for event in orchestrator.execute_stream(user_prompt, app_type=app_type, auto_push=True):
+            for event in orchestrator.execute_stream(user_prompt, app_type=app_type, auto_push=True, github_token=github_token):
                 event_type = event.get("event")
                 agent = event.get("agent", "Orchestrator")
                 message = event.get("message", "")

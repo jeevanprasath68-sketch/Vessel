@@ -11,6 +11,14 @@ from dotenv import load_dotenv
 from core.llm_client import GeminiClient
 from core.orchestrator import MultiAgentOrchestrator
 from core.build_manager import BuildManager
+from core.git_sync import (
+    resolve_github_token,
+    resolve_streamlit_cloud_url,
+    sync_and_push,
+    sanitize_url,
+    load_vessel_config,
+    save_vessel_config
+)
 
 # Load local .env
 load_dotenv()
@@ -480,6 +488,16 @@ if not current_remote:
         pass
 
 connected_remote = current_remote
+clean_connected_remote = sanitize_url(connected_remote)
+
+# Persistent configuration, GitHub PAT & Streamlit Cloud URL resolution
+if "active_github_token" not in st.session_state:
+    st.session_state["active_github_token"] = resolve_github_token() or ""
+effective_github_token = st.session_state["active_github_token"]
+
+if "streamlit_cloud_url" not in st.session_state:
+    st.session_state["streamlit_cloud_url"] = resolve_streamlit_cloud_url(clean_connected_remote)
+effective_streamlit_url = st.session_state["streamlit_cloud_url"]
 
 if "selected_model" not in st.session_state or st.session_state["selected_model"] == "gemini-flash-latest":
     st.session_state["selected_model"] = "gemini-flash-lite-latest"
@@ -722,10 +740,11 @@ elif menu == "GitHub Repository":
 
     with col_rmain:
         with st.container(border=True):
-            st.markdown("##### Git Origin Remote")
+            st.markdown("##### 1. Git Origin Remote")
+            st.caption("The remote GitHub repository where generated applications are stored.")
             repo_input = st.text_input(
                 "Repository URL",
-                value=connected_remote,
+                value=clean_connected_remote,
                 help="HTTPS Git remote origin URL",
                 label_visibility="collapsed"
             )
@@ -758,21 +777,86 @@ elif menu == "GitHub Repository":
                         st.error(f"Reset error: {e}")
 
             with r3:
-                st.link_button("View on GitHub ↗", connected_remote, use_container_width=True)
+                st.link_button("View on GitHub ↗", clean_connected_remote, use_container_width=True)
 
             st.divider()
 
-            st.markdown("##### Manual Sync")
+            st.markdown("##### 2. Streamlit Community Cloud URL")
+            st.caption("Your live production deployment URL on Streamlit Cloud (dashboard buttons link here):")
+            st_url_input = st.text_input(
+                "Streamlit Cloud App URL",
+                value=effective_streamlit_url,
+                placeholder="https://your-app-slug.streamlit.app or https://share.streamlit.io",
+                label_visibility="collapsed"
+            )
+            col_st_save, col_st_open = st.columns([1.2, 1.8])
+            with col_st_save:
+                if st.button("Save Streamlit Link", use_container_width=True):
+                    val = st_url_input.strip()
+                    if val:
+                        st.session_state["streamlit_cloud_url"] = val
+                        save_vessel_config({"streamlit_cloud_url": val})
+                        st.success("Streamlit Cloud URL saved!")
+                        st.rerun()
+                    else:
+                        st.error("URL cannot be empty.")
+            with col_st_open:
+                st.link_button("🌐 Open Live App ↗", effective_streamlit_url, use_container_width=True)
+
+            st.divider()
+
+            st.markdown("##### 3. GitHub Authentication (Personal Access Token)")
+            st.caption("Required for automated Git pushing from Streamlit Community Cloud containers:")
+            pat_input = st.text_input(
+                "GitHub Personal Access Token (PAT)",
+                value=effective_github_token,
+                type="password",
+                placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                help="Generate on GitHub: Settings -> Developer Settings -> Personal access tokens (classic) with 'repo' scope.",
+                label_visibility="collapsed"
+            )
+            col_pat1, col_pat2 = st.columns([1.5, 1.5])
+            with col_pat1:
+                if st.button("Save Token", use_container_width=True):
+                    pt = pat_input.strip()
+                    st.session_state["active_github_token"] = pt
+                    save_vessel_config({"github_token": pt})
+                    st.success("GitHub Token saved securely!")
+                    st.rerun()
+            with col_pat2:
+                if st.button("Clear Token", use_container_width=True):
+                    st.session_state["active_github_token"] = ""
+                    save_vessel_config({"github_token": ""})
+                    st.info("Token cleared.")
+                    st.rerun()
+
+            st.markdown(
+                """
+                <div style="background: #090909; border: 1px solid #1f1f1f; border-radius: 6px; padding: 10px 12px; margin-top: 8px; font-size: 12px; color: #a1a1aa;">
+                    <b>💡 Why is a GitHub Token needed?</b><br>
+                    Streamlit Community Cloud runs in a headless Linux container with no interactive terminal. When pushing code to GitHub, Git cannot prompt for credentials and crashes with <code>fatal: could not read Username</code>.
+                    Supplying a Personal Access Token (or defining <code>GITHUB_TOKEN</code> in Streamlit Cloud Secrets) enables non-interactive auto-pushing so every build deploys live instantly.
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            st.divider()
+
+            st.markdown("##### 4. Manual Sync")
             st.caption("Pushes the current generated build to origin/main immediately:")
             if st.button("Push to GitHub Now", use_container_width=True):
                 with st.spinner("Pushing build to origin/main..."):
-                    subprocess.run(["git", "add", "."], cwd=output_dir)
-                    subprocess.run(["git", "commit", "-m", f"Manual sync: {time.strftime('%Y-%m-%d %H:%M:%S')}"], cwd=output_dir)
-                    p = subprocess.run(["git", "push", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
-                    if p.returncode == 0:
-                        st.success("Pushed to origin/main. Cloud redeployment initiated.")
+                    sync_res = sync_and_push(
+                        output_dir,
+                        f"Manual sync: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                        token=effective_github_token
+                    )
+                    if sync_res.get("success"):
+                        chash = sync_res.get("commit_hash", "HEAD")
+                        st.success(f"Pushed commit `{chash}` to origin/main. Cloud redeployment initiated!")
                     else:
-                        st.error(f"Push failed: {p.stderr}")
+                        st.error(f"Push failed: {sync_res.get('error')}")
 
     with col_rinfo:
         with st.container(border=True):
@@ -799,8 +883,20 @@ elif menu == "GitHub Repository":
             )
             st.divider()
             st.markdown("<div class='mono-kicker'>TARGET ENVIRONMENT</div>", unsafe_allow_html=True)
-            st.markdown("##### Workspace Remote")
-            st.caption(f"Local Workspace: `generated_app/`\n\nBranch: `main`\n\nRemote URL: `{connected_remote}`")
+            st.markdown("##### Workspace & Auth Status")
+            auth_badge = "<span style='color: #ffffff; background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-weight: 700;'>PAT CONFIGURED</span>" if effective_github_token else "<span style='color: #71717a; background: #141414; padding: 2px 6px; border-radius: 4px;'>LOCAL CREDENTIALS</span>"
+            st.markdown(
+                f"""
+                <div style="font-size: 12px; color: #a1a1aa; line-height: 1.8;">
+                    <b>Local Workspace:</b> <code>generated_app/</code><br>
+                    <b>Branch:</b> <code>main</code><br>
+                    <b>Remote URL:</b> <code>{clean_connected_remote}</code><br>
+                    <b>Streamlit App:</b> <a href='{effective_streamlit_url}' target='_blank' style='color: #ffffff;'>{effective_streamlit_url} ↗</a><br>
+                    <b>Cloud Push Auth:</b> {auth_badge}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 
 # =====================================================================
@@ -923,7 +1019,8 @@ elif menu == "App Builder":
                 model=effective_model,
                 max_repairs=st.session_state.get("max_repairs", 3),
                 timeout_sec=st.session_state.get("timeout_sec", 20),
-                app_type=app_type
+                app_type=app_type,
+                github_token=effective_github_token
             )
             if started:
                 st.rerun()
@@ -978,21 +1075,34 @@ elif menu == "App Builder":
 
             # Live Cloud Sync & GitHub Status Banner
             sync_info = state.get("git_sync_status")
+            cloud_url = effective_streamlit_url or resolve_streamlit_cloud_url(clean_connected_remote)
             if sync_info and isinstance(sync_info, dict):
                 if sync_info.get("success"):
                     chash = sync_info.get("commit_hash", "")
-                    rurl = sync_info.get("remote_url", connected_remote)
-                    st.success(f"🚀 **Auto-Deployed to GitHub & Streamlit Cloud** &bull; Commit `{chash}` synced to [{rurl}]({rurl}). Streamlit Cloud will auto-redeploy within seconds!")
+                    rurl = sync_info.get("remote_url", clean_connected_remote)
+                    st.success(
+                        f"🚀 **Auto-Deployed to GitHub & Streamlit Cloud** &bull; Commit `{chash}` synced to [{rurl}]({rurl}). "
+                        f"&nbsp;&nbsp;[**🌐 Open Live App on Streamlit Cloud ↗**]({cloud_url})"
+                    )
                 else:
                     err_msg = sync_info.get("error", "Push failed")
-                    st.warning(f"⚠️ **GitHub Sync Notice:** {err_msg} (Use 'Push to GitHub' below to retry).")
+                    st.warning(f"⚠️ **GitHub Sync Notice:** {err_msg} (Configure PAT under 'GitHub Repository' settings).")
             elif sync_info and isinstance(sync_info, str):
-                st.success(f"🚀 **Auto-Deployed:** {sync_info}")
+                st.success(f"🚀 **Auto-Deployed:** {sync_info} &nbsp;&bull;&nbsp; [**🌐 Open Streamlit Cloud ↗**]({cloud_url})")
 
             # Primary Action Bar Container
             with st.container(border=True):
-                col_l1, col_l2, col_l3, col_l4, col_l5 = st.columns([1.5, 1.4, 1.3, 1.1, 1.1])
-                with col_l1:
+                col_st, col_local, col_gh, col_push, col_zip, col_new = st.columns([1.5, 1.4, 1.2, 1.1, 1.0, 1.0])
+                with col_st:
+                    st.link_button(
+                        "🌐 View on Streamlit Cloud ↗",
+                        cloud_url,
+                        type="primary",
+                        use_container_width=True,
+                        help="Open the live deployed application on Streamlit Community Cloud"
+                    )
+                    st.caption(f"Cloud Target: `{cloud_url.replace('https://', '')[:28]}`")
+                with col_local:
                     proc = st.session_state.get("local_app_proc")
                     is_proc_running = proc and (proc.poll() is None)
                     current_app_port = st.session_state.get("local_app_port")
@@ -1043,31 +1153,25 @@ elif menu == "App Builder":
                             else:
                                 st.error("No app.py found.")
                         st.caption(f"Port: `{suggested_port}` (avoiding Vessel)")
-                with col_l2:
+                with col_gh:
+                    st.link_button("View on GitHub ↗", clean_connected_remote, use_container_width=True)
+                with col_push:
                     if st.button("🚀 Push to GitHub", help="Manually push current build to origin/main", use_container_width=True):
                         with st.spinner("Pushing to GitHub origin/main..."):
-                            subprocess.run(["git", "add", "-A"], cwd=output_dir)
-                            subprocess.run(["git", "commit", "-m", f"Manual sync: {time.strftime('%Y-%m-%d %H:%M:%S')}"], cwd=output_dir)
-                            push_p = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
-                            if push_p.returncode != 0:
-                                subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=output_dir, capture_output=True)
-                                push_p = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=output_dir, capture_output=True, text=True)
-                            if push_p.returncode == 0:
-                                rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=output_dir, capture_output=True, text=True).stdout.strip()
+                            sync_res = sync_and_push(
+                                output_dir,
+                                f"Manual sync: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                                token=effective_github_token
+                            )
+                            if sync_res.get("success"):
+                                rev = sync_res.get("commit_hash", "HEAD")
                                 if "last_run_state" in st.session_state:
-                                    st.session_state["last_run_state"]["git_sync_status"] = {
-                                        "success": True,
-                                        "remote_url": connected_remote,
-                                        "commit_hash": rev,
-                                        "message": f"Pushed {rev}"
-                                    }
+                                    st.session_state["last_run_state"]["git_sync_status"] = sync_res
                                 st.success(f"Pushed commit `{rev}` to GitHub! Streamlit Cloud redeploying.")
                                 st.rerun()
                             else:
-                                st.error(f"Push failed: {push_p.stderr or push_p.stdout}")
-                with col_l3:
-                    st.link_button("View on GitHub ↗", connected_remote, use_container_width=True)
-                with col_l4:
+                                st.error(f"Push failed: {sync_res.get('error')}")
+                with col_zip:
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                         zip_file.writestr("app.py", state.get("current_app_code", ""))
@@ -1081,7 +1185,7 @@ elif menu == "App Builder":
                         mime="application/zip",
                         use_container_width=True
                     )
-                with col_l5:
+                with col_new:
                     if st.button("➕ New App", help="Clear results and start fresh", use_container_width=True):
                         old_proc = st.session_state.get("local_app_proc")
                         if old_proc and old_proc.poll() is None:
