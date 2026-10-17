@@ -21,12 +21,10 @@ def test_sanitize_message():
     assert "1234567890abcdef" not in clean
     assert "https://github.com/user/repo.git" in clean
 
-def test_resolve_streamlit_cloud_url_smart_default():
+def test_resolve_streamlit_cloud_url_default():
     remote = "https://github.com/jeevanprasath68-sketch/generated.git"
     url = resolve_streamlit_cloud_url(remote)
-    assert "jeevanprasath68-sketch" in url
-    assert "generated" in url
-    assert url.endswith(".streamlit.app")
+    assert url == "https://share.streamlit.io"
 
 def test_save_and_load_vessel_config(tmp_path, monkeypatch):
     test_cfg_file = str(tmp_path / "test_vessel_config.json")

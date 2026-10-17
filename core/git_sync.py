@@ -102,15 +102,7 @@ def resolve_streamlit_cloud_url(connected_remote: str = "") -> str:
     if cfg_url and isinstance(cfg_url, str) and cfg_url.strip():
         return cfg_url.strip()
 
-    # 4. Smart default:
-    # If repo is https://github.com/jeevanprasath68-sketch/generated.git,
-    # Streamlit Cloud app default subdomain is often jeevanprasath68-sketch-generated.streamlit.app
-    if connected_remote:
-        m = re.search(r"github\.com[/:]([\w-]+)/([\w-]+)", connected_remote)
-        if m:
-            owner, repo = m.group(1), m.group(2).replace(".git", "")
-            return f"https://{owner}-{repo}.streamlit.app"
-
+    # 4. Safe default: Streamlit Cloud Dashboard (avoids 404 / 'no access' on uncreated subdomains)
     return DEFAULT_STREAMLIT_URL
 
 

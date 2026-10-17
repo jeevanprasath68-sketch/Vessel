@@ -120,52 +120,136 @@ st.markdown("""
         border-color: #ffffff;
     }
 
-    /* Buttons: Strict Black & White */
-    .stButton > button, button[kind="primary"], button[kind="secondary"] {
-        background-color: #ffffff !important;
-        color: #0b0b0b !important;
-        border: 1px solid #ffffff !important;
+    /* =========================================================================
+       BUTTONS & LINK BUTTONS (High-Contrast Monochrome)
+       ========================================================================= */
+
+    /* Universal base reset for all button, popover, and link button elements */
+    .stButton > button,
+    .stDownloadButton > button,
+    div[data-testid="stDownloadButton"] > button,
+    div[data-testid="stPopover"] > button,
+    div[data-testid="stLinkButton"] a,
+    div.stLinkButton a,
+    a[data-testid^="stBaseLinkButton"] {
         border-radius: 6px !important;
         font-weight: 600 !important;
         font-size: 13px !important;
         letter-spacing: -0.01em !important;
         padding: 8px 16px !important;
+        text-decoration: none !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
         transition: all 0.15s ease !important;
     }
-    .stButton > button:hover {
+
+    /* 1. PRIMARY BUTTONS & PRIMARY LINK BUTTONS (Solid White Card, Pure Black Text) */
+    button[kind="primary"],
+    button[data-testid="stBaseButton-primary"],
+    .stButton > button[kind="primary"],
+    div[data-testid="stLinkButton"] a[kind="primary"],
+    div.stLinkButton a[kind="primary"],
+    a[data-testid="stBaseLinkButton-primary"] {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border: 1px solid #ffffff !important;
+        font-weight: 700 !important;
+    }
+
+    /* Force all text & icons inside primary buttons/links to pure black */
+    button[kind="primary"] *,
+    button[data-testid="stBaseButton-primary"] *,
+    .stButton > button[kind="primary"] *,
+    div[data-testid="stLinkButton"] a[kind="primary"] *,
+    div.stLinkButton a[kind="primary"] *,
+    a[data-testid="stBaseLinkButton-primary"] * {
+        color: #000000 !important;
+        fill: #000000 !important;
+    }
+
+    button[kind="primary"]:hover,
+    button[data-testid="stBaseButton-primary"]:hover,
+    .stButton > button[kind="primary"]:hover,
+    div[data-testid="stLinkButton"] a[kind="primary"]:hover,
+    div.stLinkButton a[kind="primary"]:hover,
+    a[data-testid="stBaseLinkButton-primary"]:hover {
         background-color: #e5e5e5 !important;
         border-color: #e5e5e5 !important;
         color: #000000 !important;
         transform: translateY(-1px) !important;
     }
-    
-    /* Secondary / Normal Buttons (Ghost outline) */
-    div:not([data-testid="stForm"]) > div > .stButton > button[kind="secondary"],
-    .stButton > button:not([kind="primary"]) {
-        background-color: #121212 !important;
-        color: #ffffff !important;
-        border: 1px solid #262626 !important;
+
+    button[kind="primary"]:hover *,
+    div[data-testid="stLinkButton"] a[kind="primary"]:hover * {
+        color: #000000 !important;
     }
-    .stButton > button:not([kind="primary"]):hover {
-        background-color: #1a1a1a !important;
-        border-color: #404040 !important;
+
+    /* 2. SECONDARY BUTTONS, DOWNLOAD BUTTONS & SECONDARY LINK BUTTONS (Sleek Dark Card, Crisp White Text) */
+    button[kind="secondary"],
+    button[data-testid="stBaseButton-secondary"],
+    div[data-testid="stPopover"] > button,
+    .stDownloadButton > button,
+    div[data-testid="stDownloadButton"] > button,
+    .stButton > button:not([kind="primary"]):not([data-testid="stBaseButton-primary"]),
+    div[data-testid="stLinkButton"] a:not([kind="primary"]):not([data-testid="stBaseLinkButton-primary"]),
+    div.stLinkButton a:not([kind="primary"]),
+    a[data-testid="stBaseLinkButton-secondary"] {
+        background-color: #121214 !important;
+        color: #ededed !important;
+        border: 1px solid #27272a !important;
+    }
+
+    /* Force all text & icons inside secondary buttons/links to crisp white */
+    button[kind="secondary"] *,
+    button[data-testid="stBaseButton-secondary"] *,
+    div[data-testid="stPopover"] > button *,
+    .stDownloadButton > button *,
+    div[data-testid="stDownloadButton"] > button *,
+    .stButton > button:not([kind="primary"]):not([data-testid="stBaseButton-primary"]) *,
+    div[data-testid="stLinkButton"] a:not([kind="primary"]) *,
+    div.stLinkButton a:not([kind="primary"]) *,
+    a[data-testid="stBaseLinkButton-secondary"] * {
+        color: #ededed !important;
+        fill: #ededed !important;
+    }
+
+    button[kind="secondary"]:hover,
+    button[data-testid="stBaseButton-secondary"]:hover,
+    div[data-testid="stPopover"] > button:hover,
+    .stDownloadButton > button:hover,
+    div[data-testid="stDownloadButton"] > button:hover,
+    .stButton > button:not([kind="primary"]):hover,
+    div[data-testid="stLinkButton"] a:not([kind="primary"]):hover,
+    div.stLinkButton a:not([kind="primary"]):hover,
+    a[data-testid="stBaseLinkButton-secondary"]:hover {
+        background-color: #1a1a1e !important;
+        border-color: #3f3f46 !important;
+        color: #ffffff !important;
+        transform: translateY(-1px) !important;
+    }
+
+    button[kind="secondary"]:hover *,
+    div[data-testid="stPopover"] > button:hover *,
+    .stDownloadButton > button:hover *,
+    div[data-testid="stDownloadButton"] > button:hover *,
+    div[data-testid="stLinkButton"] a:not([kind="primary"]):hover * {
         color: #ffffff !important;
     }
 
-    /* Link Buttons */
-    a[data-testid="stLinkButton"] {
-        background-color: #121212 !important;
-        color: #ffffff !important;
-        border: 1px solid #262626 !important;
-        border-radius: 6px !important;
-        font-weight: 600 !important;
-        font-size: 13px !important;
-        transition: all 0.15s ease !important;
+    /* Popover Container Styling */
+    div[data-testid="stPopoverBody"] {
+        background-color: #121214 !important;
+        border: 1px solid #27272a !important;
+        color: #ededed !important;
+        border-radius: 8px !important;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.8) !important;
+        padding: 12px !important;
     }
-    a[data-testid="stLinkButton"]:hover {
-        background-color: #1a1a1a !important;
-        border-color: #404040 !important;
-        color: #ffffff !important;
+    div[data-testid="stPopoverBody"] p,
+    div[data-testid="stPopoverBody"] span,
+    div[data-testid="stPopoverBody"] div {
+        color: #ededed !important;
     }
 
     /* Form Inputs */
@@ -368,15 +452,30 @@ st.markdown("""
         color: #000000 !important;
     }
 
-    /* Remove standard alert colors (make all alerts clean monochrome dark cards) */
-    div[data-testid="stAlert"] {
-        background-color: #121212 !important;
+    /* Clean Monochrome Alerts for st.success, st.info, st.warning, st.error */
+    div[data-testid="stAlert"],
+    div[data-testid="stAlert"] > div,
+    div[data-testid="stAlert"] [role="alert"],
+    div.stAlert,
+    div[data-testid="stNotification"] {
+        background-color: #121214 !important;
         color: #ededed !important;
-        border: 1px solid #262626 !important;
+        border: 1px solid #27272a !important;
         border-radius: 6px !important;
+    }
+    div[data-testid="stAlert"] p,
+    div[data-testid="stAlert"] span,
+    div[data-testid="stAlert"] div {
+        color: #ededed !important;
+    }
+    div[data-testid="stAlert"] a {
+        color: #ffffff !important;
+        text-decoration: underline !important;
+        font-weight: 600 !important;
     }
     div[data-testid="stAlert"] svg {
         fill: #ffffff !important;
+        color: #ffffff !important;
     }
 
     /* Progress Bar */
@@ -1076,14 +1175,19 @@ elif menu == "App Builder":
             # Live Cloud Sync & GitHub Status Banner
             sync_info = state.get("git_sync_status")
             cloud_url = effective_streamlit_url or resolve_streamlit_cloud_url(clean_connected_remote)
+            is_custom_url = bool(cloud_url and cloud_url != "https://share.streamlit.io" and "streamlit" in cloud_url)
+
             if sync_info and isinstance(sync_info, dict):
                 if sync_info.get("success"):
                     chash = sync_info.get("commit_hash", "")
                     rurl = sync_info.get("remote_url", clean_connected_remote)
+                    link_title = "Open Live App ↗" if is_custom_url else "Open Streamlit Cloud Workspace ↗"
                     st.success(
                         f"🚀 **Auto-Deployed to GitHub & Streamlit Cloud** &bull; Commit `{chash}` synced to [{rurl}]({rurl}). "
-                        f"&nbsp;&nbsp;[**🌐 Open Live App on Streamlit Cloud ↗**]({cloud_url})"
+                        f"&nbsp;&nbsp;[**🌐 {link_title}**]({cloud_url})"
                     )
+                    if not is_custom_url:
+                        st.caption("💡 Deployed on Streamlit Cloud? Click '⚙️ Set Live App URL' below to link your live `.streamlit.app` URL directly.")
                 else:
                     err_msg = sync_info.get("error", "Push failed")
                     st.warning(f"⚠️ **GitHub Sync Notice:** {err_msg} (Configure PAT under 'GitHub Repository' settings).")
@@ -1094,21 +1198,40 @@ elif menu == "App Builder":
             with st.container(border=True):
                 col_st, col_local, col_gh, col_push, col_zip, col_new = st.columns([1.5, 1.4, 1.2, 1.1, 1.0, 1.0])
                 with col_st:
+                    btn_text = "🌐 View Live App ↗" if is_custom_url else "🌐 Streamlit Cloud ↗"
                     st.link_button(
-                        "🌐 View on Streamlit Cloud ↗",
+                        btn_text,
                         cloud_url,
                         type="primary",
                         use_container_width=True,
-                        help="Open the live deployed application on Streamlit Community Cloud"
+                        help="Open the live deployed application or Streamlit Community Cloud workspace"
                     )
-                    st.caption(f"Cloud Target: `{cloud_url.replace('https://', '')[:28]}`")
+                    with st.popover("⚙️ Set Live App URL" if not is_custom_url else "⚙️ Edit Live App URL", use_container_width=True):
+                        st.markdown("**Live App URL**")
+                        st.caption("Paste your live `.streamlit.app` URL here so this button links directly to your deployed app.")
+                        new_url_input = st.text_input(
+                            "Live URL",
+                            value=effective_streamlit_url if is_custom_url else "",
+                            placeholder="https://your-app.streamlit.app",
+                            key="quick_live_url_input"
+                        )
+                        if st.button("Save Live URL", use_container_width=True, key="quick_save_live_url_btn"):
+                            clean_val = new_url_input.strip()
+                            if clean_val:
+                                save_vessel_config({"streamlit_cloud_url": clean_val})
+                                st.session_state["streamlit_cloud_url"] = clean_val
+                            else:
+                                save_vessel_config({"streamlit_cloud_url": ""})
+                                st.session_state["streamlit_cloud_url"] = ""
+                            st.success("Saved! Streamlit link updated.")
+                            st.rerun()
                 with col_local:
                     proc = st.session_state.get("local_app_proc")
                     is_proc_running = proc and (proc.poll() is None)
                     current_app_port = st.session_state.get("local_app_port")
 
                     if is_proc_running and current_app_port:
-                        st.link_button(f"🟢 Open App ({current_app_port}) ↗", f"http://localhost:{current_app_port}", type="primary", use_container_width=True)
+                        st.link_button(f"🟢 Open App ({current_app_port}) ↗", f"http://localhost:{current_app_port}", type="secondary", use_container_width=True)
                         c_rst, c_stp = st.columns(2)
                         with c_rst:
                             if st.button("🔄 Restart", use_container_width=True, help="Restart local app process"):
@@ -1138,7 +1261,7 @@ elif menu == "App Builder":
                                 st.rerun()
                     else:
                         suggested_port = get_free_port(avoid_port=current_vessel_port)
-                        if st.button(f"▶️ Launch Local ({suggested_port})", type="primary", use_container_width=True):
+                        if st.button(f"▶️ Launch Local ({suggested_port})", type="secondary", use_container_width=True):
                             app_path = os.path.join(output_dir, "app.py")
                             if os.path.exists(app_path):
                                 try:
