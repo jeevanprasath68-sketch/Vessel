@@ -1,6 +1,6 @@
 # Generated Application
 
-**Requirement:** Create a prioritized task manager
+**Requirement:** Build an arcade Galaxy Space Shooter game featuring retro glowing vector ships, procedural laser and explosion sounds via Web Audio, dynamic particle sparks, progressive enemy waves, power-up shields/multishot, and a persistent SQLite high-score table.
 
 **Format:** Streamlit Web App
 
